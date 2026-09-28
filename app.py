@@ -1,8 +1,7 @@
 import os
 import glob
 import streamlit as st
-import google.generativeai as genai
-
+from google import genai
 # Design & Layout
 st.set_page_config(page_title="Programm Deep View", page_icon="⚡", layout="wide")
 
