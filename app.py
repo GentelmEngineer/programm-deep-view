@@ -2,6 +2,7 @@ import os
 import glob
 import streamlit as st
 from google import genai
+
 # Design & Layout
 st.set_page_config(page_title="Programm Deep View", page_icon="⚡", layout="wide")
 
@@ -15,14 +16,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Schlüssel laden
+# API-Key laden
 api_key = st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else os.getenv("GEMINI_API_KEY")
 
 if not api_key:
     st.error("FEHLER: Der Schlüssel (GEMINI_API_KEY) fehlt noch in den Einstellungen!")
     st.stop()
 
-genai.configure(api_key=api_key)
+# Client mit dem neuen SDK initialisieren (unterstützt AQ. Keys)
+client = genai.Client(api_key=api_key)
 
 st.markdown('<div class="title-text">> PROGRAMM_DEEP_VIEW // v1.0</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen & Konsequenzen-Check</div>', unsafe_allow_html=True)
@@ -62,7 +64,7 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                 gemini_files = []
                 for pdf_path in pdf_files:
                     party_name = os.path.basename(pdf_path).replace(".pdf", "")
-                    g_file = genai.upload_file(pdf_path, display_name=party_name)
+                    g_file = client.files.upload(file=pdf_path)
                     gemini_files.append((party_name, g_file))
 
                 prompt = f"""
@@ -82,15 +84,18 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                 Erstelle am Ende eine Tabelle: Partei | Hauptmaßnahme | Positiver Effekt | Hauptrisiko
                 """
 
-                model = genai.GenerativeModel("gemini-1.5-pro")
-                input_content = [f[1] for f in gemini_files] + [prompt]
-                response = model.generate_content(input_content)
+                # Aufruf mit aktuellem Flash-Modell
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[*[f[1] for f in gemini_files], prompt]
+                )
 
                 st.markdown("---")
                 st.markdown(response.text)
 
                 # Aufräumen
                 for _, g_file in gemini_files:
-                    genai.delete_file(g_file.name)
+                    client.files.delete(name=g_file.name)
+
             except Exception as e:
                 st.error(f"Fehler: {e}")
