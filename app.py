@@ -2,7 +2,6 @@ import os
 import glob
 import streamlit as st
 from google import genai
-from google.genai import types
 
 # Design & Layout Setup
 st.set_page_config(page_title="Programm Deep View", page_icon="⚡", layout="wide")
@@ -24,8 +23,7 @@ if not api_key:
     st.error("FEHLER: Der Schlüssel (GEMINI_API_KEY) fehlt noch in den Einstellungen!")
     st.stop()
 
-# Client sauber ohne fehleranfälliges HttpRetryOptions-Objekt initialisieren
-# (Das google-genai SDK führt bei Netzwerkspikes standardmäßig interne Retries durch)
+# Client initialisieren
 client = genai.Client(api_key=api_key)
 
 st.markdown('<div class="title-text">> PROGRAMM_DEEP_VIEW // v1.0</div>', unsafe_allow_html=True)
@@ -64,6 +62,7 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
         with st.spinner("Lese Parteiprogramme und analysiere Konsequenzen..."):
             gemini_files = []
             try:
+                # PDFs hochladen
                 for pdf_path in pdf_files:
                     party_name = os.path.basename(pdf_path).replace(".pdf", "")
                     g_file = client.files.upload(file=pdf_path)
@@ -86,17 +85,37 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                 Erstelle am Ende eine Tabelle: Partei | Hauptmaßnahme | Positiver Effekt | Hauptrisiko
                 """
 
-                # Aufruf mit gemini-3.7-flash
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash-lite',
-                    contents=[*[f[1] for f in gemini_files], prompt]
-                )
+                # 2.5-flash-lite ist jetzt als erste Option gesetzt
+                models_to_try = [
+                    "gemini-2.5-flash-lite",
+                    "gemini-2.5-flash",
+                    "gemini-2.0-flash-lite"
+                ]
+                
+                response = None
+                last_error = None
 
-                st.markdown("---")
-                st.markdown(response.text)
+                # Automatische Ausweich-Schleife gegen 503-Spikes
+                for model_name in models_to_try:
+                    try:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=[*[f[1] for f in gemini_files], prompt]
+                        )
+                        if response and response.text:
+                            break  # Analyse erfolgreich, Schleife beenden!
+                    except Exception as err:
+                        last_error = err
+                        continue  # Bei Fehler direkt nächstes Modell probieren
+
+                if response and response.text:
+                    st.markdown("---")
+                    st.markdown(response.text)
+                else:
+                    st.error(f"Fehler bei allen Modellen: {last_error}")
 
             except Exception as e:
-                st.error(f"Fehler bei der Analyse: {e}")
+                st.error(f"Allgemeiner Fehler: {e}")
 
             finally:
                 # Aufräumen der temporären Dateien bei Google
