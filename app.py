@@ -88,7 +88,7 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
 
                 # Aufruf mit gemini-3.7-flash
                 response = client.models.generate_content(
-                    model='gemini-3.8-flash',
+                    model='gemini-2.5-flash-light',
                     contents=[*[f[1] for f in gemini_files], prompt]
                 )
 
