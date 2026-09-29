@@ -85,11 +85,11 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                 Erstelle am Ende eine Tabelle: Partei | Hauptmaßnahme | Positiver Effekt | Hauptrisiko
                 """
 
-                # 2.5-flash-lite ist jetzt als erste Option gesetzt
+                # 3.5-flash-lite ist jetzt als erste Option gesetzt
                 models_to_try = [
                     "gemini-2.5-flash-lite",
-                    "gemini-2.5-flash",
-                    "gemini-2.0-flash-lite"
+                    "gemini-3.5-flash",
+                    "gemini-2.5-flash-lite"
                 ]
                 
                 response = None
