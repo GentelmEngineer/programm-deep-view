@@ -26,6 +26,13 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 DATA_DIR = "data"
 
+# Festgelegte Modell-Reihenfolge
+MODELS_TO_TRY = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash-lite"
+]
+
 def get_pdf_page_count(filepath):
     try:
         reader = pypdf.PdfReader(filepath)
@@ -64,25 +71,27 @@ def get_cached_gemini_files(file_tuples):
         
     return gemini_files
 
-# --- HOT TOPICS GENERIERUNG ---
+# --- HOT TOPICS GENERIERUNG (MIT MODELL-FALLBACK) ---
 @st.cache_data(show_spinner="Ermittle Hot Topics...")
 def get_hot_topics(file_tuples, _api_key):
     temp_client = genai.Client(api_key=_api_key)
-    # Nutzen vorgehaltene Uploads
     g_files = [st.session_state.uploaded_gemini_files[path] for _, path, _ in file_tuples if path in st.session_state.uploaded_gemini_files]
     if not g_files:
         return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
     
     prompt = "Nenne 5-7 prägnante Hauptthemen/Schlagwörter dieser Parteiprogramme. Gib NUR eine kommagetrennte Liste zurück."
-    try:
-        res = temp_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[*g_files, prompt]
-        )
-        if res and res.text:
-            return [t.strip() for t in res.text.split(",") if t.strip()]
-    except Exception:
-        pass
+    
+    for model_name in MODELS_TO_TRY:
+        try:
+            res = temp_client.models.generate_content(
+                model=model_name,
+                contents=[*g_files, prompt]
+            )
+            if res and res.text:
+                return [t.strip() for t in res.text.split(",") if t.strip()]
+        except Exception:
+            continue
+
     return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
 
 # --- SIDEBAR & PARTEIAUSWAHL ---
@@ -166,18 +175,31 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
         Partei | Hauptmaßnahme | Positiver Effekt | Hauptrisiko
         """
 
-        # STREAMING EXECUTION
+        # STREAMING EXECUTION MIT MODELL-REIHE
         def stream_generator():
-            try:
-                response = client.models.generate_content_stream(
-                    model="gemini-3.8-flash",
-                    contents=[*active_g_files, prompt]
-                )
-                for chunk in response:
-                    if chunk.text:
-                        yield chunk.text
-            except Exception as e:
-                yield f"\n\n**Fehler bei der Analyse:** {e}"
+            last_error = None
+            for model_name in MODELS_TO_TRY:
+                try:
+                    response = client.models.generate_content_stream(
+                        model=model_name,
+                        contents=[*active_g_files, prompt]
+                    )
+                    
+                    # Versuche erste Chunks abzufragen
+                    has_content = False
+                    for chunk in response:
+                        if chunk.text:
+                            has_content = True
+                            yield chunk.text
+                            
+                    # Wenn erfolgreich gestreamt wurde, Breaken
+                    if has_content:
+                        return
+                except Exception as e:
+                    last_error = e
+                    continue # Nächstes Modell probieren
+            
+            yield f"\n\n**Fehler:** Keine Antwort von allen Modellen erhalten. ({last_error})"
 
         # Live-Anzeige per Stream
         st.write_stream(stream_generator())
