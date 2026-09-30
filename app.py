@@ -7,14 +7,13 @@ import pypdf
 # Design & Layout Setup
 st.set_page_config(page_title="PDV V1.1", page_icon="⚡", layout="wide")
 
-# CSS für den Hacker-/Terminal-Look
+# CSS für den Hacker-/Terminal-Look & klickbare Hot-Topic-Chips
 st.markdown("""
 <style>
     html, body, [class*="css"] { font-family: 'Courier New', Courier, monospace !important; }
     .title-text { font-size: 2.2rem; font-weight: 700; color: #00FF66; margin-bottom: 0px; }
     .sub-text { color: #8B949E; font-size: 0.9rem; margin-bottom: 10px; }
     .pdf-info { color: #58A6FF; font-size: 0.85rem; margin-bottom: 15px; }
-    .hot-topic-badge { display: inline-block; background-color: #1F6FEB; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 5px; margin-bottom: 5px; }
     .stButton>button { background-color: #238636 !important; color: #ffffff !important; border: 1px solid #2EA043 !important; width: 100%; }
 </style>
 """, unsafe_allow_html=True)
@@ -41,6 +40,49 @@ def get_pdf_page_count(filepath):
     except Exception:
         return "?"
 
+# Caching-Funktion für automatische Hot-Topic-Generierung
+@st.cache_data(show_spinner="Ermittle Hot Topics automatisch...")
+def get_hot_topics(file_tuples, _api_key):
+    """
+    Analysiert die ausgewählten PDFs automatisch und gibt eine Liste von Themen zurück.
+    Der Cache verhindert wiederholte API-Aufrufe bei Reruns.
+    """
+    temp_client = genai.Client(api_key=_api_key)
+    gemini_files = []
+    try:
+        for party_name, pdf_path, _ in file_tuples:
+            g_file = temp_client.files.upload(file=pdf_path)
+            gemini_files.append(g_file)
+
+        prompt = """
+        Analysiere die hochgeladenen Parteiprogramme.
+        Nenne genau 5 bis 7 prägnante Hauptthemen/Schlagwörter (z. B. Mieten, Digitalisierung, Rentenreform, Klimaschutz, Steuern),
+        die in allen oder fast allen Programmen vorkommen.
+        Gib NUR eine kommagetrennte Liste dieser Schlagwörter zurück, ohne zusätzliche Sätze oder Satzzeichen.
+        """
+
+        models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"]
+        for m in models_to_try:
+            try:
+                res = temp_client.models.generate_content(
+                    model=m,
+                    contents=[*gemini_files, prompt]
+                )
+                if res and res.text:
+                    topics = [t.strip() for t in res.text.split(",") if t.strip()]
+                    return topics
+            except Exception:
+                continue
+        return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
+    except Exception:
+        return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
+    finally:
+        for g_file in gemini_files:
+            try:
+                temp_client.files.delete(name=g_file.name)
+            except Exception:
+                pass
+
 st.sidebar.markdown("### [1] Wahl auswählen")
 selected_files = []
 
@@ -54,12 +96,10 @@ if categories:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### [2] Parteien auswählen")
     
-    # Checkbox-Auswahl für jede Partei inkl. Seitenzahl
     for pdf_path in sorted(all_pdf_paths):
         party_name = os.path.basename(pdf_path).replace(".pdf", "")
         pages = get_pdf_page_count(pdf_path)
         
-        # Standardmäßig sind alle Parteien angekreuzt
         is_selected = st.sidebar.checkbox(
             f"{party_name} ({pages} S.)", 
             value=True, 
@@ -67,7 +107,6 @@ if categories:
         )
         if is_selected:
             selected_files.append((party_name, pdf_path, pages))
-
 else:
     st.sidebar.error("Keine Ordner in 'data/' gefunden.")
 
@@ -75,7 +114,7 @@ else:
 st.markdown('<div class="title-text">> PDV V1.1</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen & Konsequenzen-Check</div>', unsafe_allow_html=True)
 
-# Vorschau der ausgewählten PDFs & Seitenzahlen unter dem Titel
+# Vorschau der ausgewählten PDFs & Seitenzahlen
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} Seiten)" for name, _, pg in selected_files])
     st.markdown(f'<div class="pdf-info">Ausgewählte Programme: {info_str}</div>', unsafe_allow_html=True)
@@ -84,61 +123,33 @@ else:
 
 st.markdown("---")
 
-# Hot Topics ermitteln (mittels Button oder automatischer Generierung)
-st.markdown("### 🔥 Hot Topics (Gemeinsame Themen)")
-if st.button("HOT TOPICS ERMITTELN"):
-    if not selected_files:
-        st.error("Keine Parteien ausgewählt!")
-    else:
-        with st.spinner("Scanne Parteiprogramme nach gemeinsamen Hauptthemen..."):
-            gemini_files = []
-            try:
-                for party_name, pdf_path, _ in selected_files:
-                    g_file = client.files.upload(file=pdf_path)
-                    gemini_files.append((party_name, g_file))
+# Session-State für gewähltes Thema initialisieren
+if "selected_topic" not in st.session_state:
+    st.session_state.selected_topic = ""
 
-                hot_topic_prompt = """
-                Analysiere die hochgeladenen Parteiprogramme.
-                Nenne genau 5 bis 8 prägnante Themen/Schlagwörter (z. B. Mieten, Digitalisierung, Rentenreform, Klimaschutz), die in ALLEN diesen Programmen behandelt werden.
-                Gib NUR eine kommagetrennte Liste der Themen zurück, sonst nichts.
-                """
-
-                models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"]
-                ht_response = None
-
-                for m in models_to_try:
-                    try:
-                        ht_response = client.models.generate_content(
-                            model=m,
-                            contents=[*[f[1] for f in gemini_files], hot_topic_prompt]
-                        )
-                        if ht_response and ht_response.text:
-                            break
-                    except Exception:
-                        continue
-
-                if ht_response and ht_response.text:
-                    topics_list = [t.strip() for t in ht_response.text.split(",")]
-                    badges_html = "".join([f'<span class="hot-topic-badge">{t}</span>' for t in topics_list])
-                    st.markdown(f"<div>{badges_html}</div>", unsafe_allow_html=True)
-                else:
-                    st.error("Fehler beim Abrufen der Hot Topics.")
-
-            except Exception as e:
-                st.error(f"Fehler: {e}")
-
-            finally:
-                for _, g_file in gemini_files:
-                    try:
-                        client.files.delete(name=g_file.name)
-                    except Exception:
-                        pass
+# Automatische Hot Topics anzeigen (ohne Extra-Klick)
+if selected_files:
+    st.markdown("### 🔥 Hot Topics (Klicke auf ein Thema zum Auswählen)")
+    
+    # Tupel in unveränderbare Form bringen für den Caching-Schlüssel
+    files_tuple = tuple(selected_files)
+    auto_topics = get_hot_topics(files_tuple, api_key)
+    
+    # Klickbare Buttons nebeneinander in Spalten rendern
+    cols = st.columns(min(len(auto_topics), 7))
+    for idx, top_name in enumerate(auto_topics):
+        col = cols[idx % len(cols)]
+        if col.button(f"📌 {top_name}", key=f"ht_btn_{idx}"):
+            st.session_state.selected_topic = top_name
 
 st.markdown("---")
 
-# Thema-Eingabe
+# Thema-Eingabe (übernimmt den Wert aus den Hot-Topic-Buttons)
 st.markdown("### [3] Thema analysieren")
-topic = st.text_input("Gib ein Thema ein (oder wähle eines aus den Hot Topics):")
+topic = st.text_input(
+    "Gib ein Thema ein oder wähle oben ein Hot Topic aus:",
+    value=st.session_state.selected_topic
+)
 
 if st.button("ANALYSEN_STARTEN [ENTER]"):
     if not selected_files:
@@ -149,12 +160,10 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
         with st.spinner("Lese Parteiprogramme und analysiere Konsequenzen..."):
             gemini_files = []
             try:
-                # Nur die ausgewählten PDFs hochladen
                 for party_name, pdf_path, _ in selected_files:
                     g_file = client.files.upload(file=pdf_path)
                     gemini_files.append((party_name, g_file))
 
-                # Absicherung gegen Halluzinationen & Quellenangabe-Pflicht
                 prompt = f"""
                 Du bist ein streng sachlicher und neutraler Analyst. 
                 Vergleiche die Vorhaben der Parteien zum Thema: {topic}
@@ -188,12 +197,11 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                 response = None
                 last_error = None
 
-                # Automatische Ausweich-Schleife
                 for model_name in models_to_try:
                     try:
                         response = client.models.generate_content(
                             model=model_name,
-                            contents=[*[f[1] for f in gemini_files], prompt]
+                            contents=[*gemini_files, prompt]
                         )
                         if response and response.text:
                             break
@@ -211,8 +219,7 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                 st.error(f"Allgemeiner Fehler: {e}")
 
             finally:
-                # Aufräumen der temporären Dateien bei Google
-                for _, g_file in gemini_files:
+                for g_file in gemini_files:
                     try:
                         client.files.delete(name=g_file.name)
                     except Exception:
