@@ -45,10 +45,6 @@ if "uploaded_gemini_files" not in st.session_state:
     st.session_state.uploaded_gemini_files = {}
 
 def get_cached_gemini_files(file_tuples):
-    """
-    Lädt PDFs nur hoch, wenn sie nicht bereits in st.session_state gelagert sind.
-    Gibt die Liste der Gemini-File-Objekte zurück.
-    """
     current_paths = {pdf_path for _, pdf_path, _ in file_tuples}
     
     # Alte Uploads löschen, die nicht mehr ausgewählt sind
@@ -121,7 +117,6 @@ st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen in Echtzei
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
     st.markdown(f'<div class="pdf-info">Ausgewählte Programme: {info_str}</div>', unsafe_allow_html=True)
-    # Uploads einmalig/gecached durchführen
     active_g_files = get_cached_gemini_files(selected_files)
 else:
     st.warning("Bitte wähle mindestens eine Partei aus.")
@@ -175,31 +170,36 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
         Partei | Hauptmaßnahme | Positiver Effekt | Hauptrisiko
         """
 
-        # STREAMING EXECUTION MIT MODELL-REIHE
-        def stream_generator():
+        # STATUS ANZEIGE + SOFORTIGES FEEDBACK BEIM STREAMING
+        status_container = st.empty()
+        
+        def stream_with_status():
             last_error = None
             for model_name in MODELS_TO_TRY:
+                status_container.info(f"⏳ Verbinde mit `{model_name}`...")
                 try:
-                    response = client.models.generate_content_stream(
+                    response_stream = client.models.generate_content_stream(
                         model=model_name,
                         contents=[*active_g_files, prompt]
                     )
                     
-                    # Versuche erste Chunks abzufragen
-                    has_content = False
-                    for chunk in response:
-                        if chunk.text:
-                            has_content = True
-                            yield chunk.text
-                            
-                    # Wenn erfolgreich gestreamt wurde, Breaken
-                    if has_content:
-                        return
+                    # Versuche den ersten Chunk zu lesen, um zu bestätigen, dass das Modell antwortet
+                    stream_iter = iter(response_stream)
+                    first_chunk = next(stream_iter, None)
+                    
+                    if first_chunk and first_chunk.text:
+                        status_container.empty() # Statusleiste entfernen, wenn Text fließt
+                        yield first_chunk.text
+                        for chunk in stream_iter:
+                            if chunk.text:
+                                yield chunk.text
+                        return  # Erfolgreich fertig
                 except Exception as e:
                     last_error = e
-                    continue # Nächstes Modell probieren
+                    status_container.warning(f"⚠️ Modell `{model_name}` nicht erreichbar. Versuche Nächstes...")
+                    continue
             
-            yield f"\n\n**Fehler:** Keine Antwort von allen Modellen erhalten. ({last_error})"
+            status_container.error(f"❌ Keines der Modelle konnte eine Antwort liefern: {last_error}")
 
-        # Live-Anzeige per Stream
-        st.write_stream(stream_generator())
+        # Ausführen & Anzeigen
+        st.write_stream(stream_with_status)
