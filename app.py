@@ -6,7 +6,7 @@ from google import genai
 import pypdf
 
 # Layout & Styling
-st.set_page_config(page_title="PDV V1.1 (High Performance)", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="PDV V1.1 (Lightning Fast)", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -18,7 +18,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# API Key Check
 api_key = st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else os.getenv("GEMINI_API_KEY")
 if not api_key:
     st.error("FEHLER: GEMINI_API_KEY fehlt!")
@@ -40,13 +39,11 @@ def get_pdf_page_count(filepath):
     except Exception:
         return "?"
 
-# --- UPLOAD & SESSION CACHING ---
 if "uploaded_gemini_files" not in st.session_state:
     st.session_state.uploaded_gemini_files = {}
 
 def get_cached_gemini_files(file_tuples):
     current_paths = {pdf_path for _, pdf_path, _ in file_tuples}
-    
     for cached_path in list(st.session_state.uploaded_gemini_files.keys()):
         if cached_path not in current_paths:
             try:
@@ -58,32 +55,41 @@ def get_cached_gemini_files(file_tuples):
     gemini_files = []
     for party_name, pdf_path, _ in file_tuples:
         if pdf_path not in st.session_state.uploaded_gemini_files:
-            # Hier laden wir die PDFs hoch (passiert nur beim ersten Start oder Kategoriewechsel)
             g_file = client.files.upload(file=pdf_path)
             st.session_state.uploaded_gemini_files[pdf_path] = g_file
         gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
-        
     return gemini_files
 
-# --- LÄDT HOT TOPICS DIREKT AUS DER LOKALEN JSON (BLITZSCHNELL) ---
-def load_precomputed_hot_topics(category_path):
-    json_path = os.path.join(category_path, "hot_topics.json")
-    if os.path.exists(json_path):
+# --- LÄDT HOT TOPICS & FERTIGE ANALYSEN AUS JSON ---
+def load_precomputed_data(category_path):
+    topics = ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
+    analyses = {}
+    
+    ht_path = os.path.join(category_path, "hot_topics.json")
+    if os.path.exists(ht_path):
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(ht_path, "r", encoding="utf-8") as f:
+                topics = json.load(f)
         except Exception:
             pass
-    # Fallback falls JSON fehlt
-    return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
+            
+    an_path = os.path.join(category_path, "hot_topic_analyses.json")
+    if os.path.exists(an_path):
+        try:
+            with open(an_path, "r", encoding="utf-8") as f:
+                analyses = json.load(f)
+        except Exception:
+            pass
+            
+    return topics, analyses
 
 # --- SIDEBAR: KATEGORIE- AUSWAHL ---
 st.sidebar.markdown("### [1] Wahl / Kategorie")
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
 selected_files = []
-selected_category_path = ""
 auto_topics = []
+precomputed_analyses = {}
 
 if categories:
     category_map = {c.replace("_", " ").title(): c for c in categories}
@@ -91,10 +97,9 @@ if categories:
     selected_category = category_map[selected_label]
     selected_category_path = os.path.join(DATA_DIR, selected_category)
     
-    # Hot Topics sofort ohne Wartezeit aus JSON laden
-    auto_topics = load_precomputed_hot_topics(selected_category_path)
+    # Sofortiger Ladevorgang aus den JSON-Dateien
+    auto_topics, precomputed_analyses = load_precomputed_data(selected_category_path)
     
-    # PDFs dieser Kategorie als festes Set laden
     all_pdf_paths = glob.glob(os.path.join(selected_category_path, "*.pdf"))
     for pdf_path in sorted(all_pdf_paths):
         party_name = os.path.basename(pdf_path).replace(".pdf", "")
@@ -102,13 +107,12 @@ if categories:
         selected_files.append((party_name, pdf_path, pages))
 
 # --- HEADER ---
-st.markdown('<div class="title-text">> PDV V1.1 (High Performance)</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Vorgeladene Deep-Analysis von Parteiprogrammen</div>', unsafe_allow_html=True)
+st.markdown('<div class="title-text">> PDV V1.1 (Lightning Fast)</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-text">Vorgeladene & Instant-Analysen von Parteiprogrammen</div>', unsafe_allow_html=True)
 
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
     st.markdown(f'<div class="pdf-info">Geladenes Parteien-Set: {info_str}</div>', unsafe_allow_html=True)
-    
     active_g_files = get_cached_gemini_files(selected_files)
 else:
     st.warning("Keine PDFs in dieser Kategorie gefunden.")
@@ -118,9 +122,9 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# HOT TOPICS CHIPS (SOFORT DA OHNE API-WARTEZEIT)
+# HOT TOPICS CHIPS
 if selected_files and auto_topics:
-    st.markdown("### 🔥 Hot Topics")
+    st.markdown("### 🔥 Hot Topics (Instant)")
     cols = st.columns(min(len(auto_topics), 7))
     for idx, top_name in enumerate(auto_topics):
         if cols[idx % len(cols)].button(f"📌 {top_name}", key=f"ht_btn_{idx}"):
@@ -138,51 +142,56 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
     else:
         st.markdown("---")
         
-        prompt = f"""
-        Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
-        
-        REGELN:
-        1. Nutze AUSSCHLIESSLICH Informationen aus den hochgeladenen Parteiprogrammen.
-        2. Gehe ins Detail und erläutere die jeweiligen Maßnahmen und Positionen umfassend.
-        3. Führe Belege und Quellenangaben an, sofern im Text auffindbar [Quelle: Dateiname.pdf, S. X].
-        4. Falls eine Partei zu dem Thema keine Aussagen trifft, gib dies explizit an.
-
-        Antworte im Markdown-Format wie folgt:
-
-        ## [PARTEI NAME]
-        ### 1. GEPLANTE MASSNAHMEN & POSITIONEN
-        - Ausführliche Beschreibung der konkreten Ziele, Forderungen und Vorhaben.
-
-        ### 2. CHANCEN & POTENZIALE
-        - Detaillierte Analyse der positiven Effekte und Chancen dieser Maßnahmen.
-
-        ### 3. RISIKEN, LÜCKEN & KRITIKPUNKTE
-        - Fundierte Analyse möglicher Risiken, unklarer Finanzierungen oder fehlender Aspekte.
-
-        ---
-        ## 📊 FAZIT & VERGLEICHSTABELLE
-        Erstelle eine übersichtliche Zusammenfassungstabelle zum direkten Vergleich aller gewählten Parteien:
-        Partei | Kernforderung / Hauptmaßnahme | Erwartete Wirkung | Haupthürde / Risiko
-        """
-
-        response_text = None
-        last_error = None
-
-        with st.spinner(f"Führe Echtzeit-Analyse für '{topic}' aus..."):
-            for model_name in MODELS_TO_TRY:
-                try:
-                    res = client.models.generate_content(
-                        model=model_name,
-                        contents=[*active_g_files, prompt]
-                    )
-                    if res and res.text:
-                        response_text = res.text
-                        break
-                except Exception as e:
-                    last_error = e
-                    continue
-
-        if response_text:
-            st.markdown(response_text)
+        # 1. PRÜFEN OB FERTIGE ANALYSE VORHANDEN IST (INSTANT)
+        if topic in precomputed_analyses:
+            st.markdown(precomputed_analyses[topic])
         else:
-            st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
+            # 2. FALLBACK: LIVE-API CALL FÜR NEUE / INDIVIDUELLE THEMEN
+            prompt = f"""
+            Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
+            
+            REGELN:
+            1. Nutze AUSSCHLIESSLICH Informationen aus den hochgeladenen Parteiprogrammen.
+            2. Gehe ins Detail und erläutere die jeweiligen Maßnahmen und Positionen umfassend.
+            3. Führe Belege und Quellenangaben an, sofern im Text auffindbar [Quelle: Dateiname.pdf, S. X].
+            4. Falls eine Partei zu dem Thema keine Aussagen trifft, gib dies explizit an.
+
+            Antworte im Markdown-Format wie folgt:
+
+            ## [PARTEI NAME]
+            ### 1. GEPLANTE MASSNAHMEN & POSITIONEN
+            - Ausführliche Beschreibung der konkreten Ziele, Forderungen und Vorhaben.
+
+            ### 2. CHANCEN & POTENZIALE
+            - Detaillierte Analyse der positiven Effekte und Chancen dieser Maßnahmen.
+
+            ### 3. RISIKEN, LÜCKEN & KRITIKPUNKTE
+            - Fundierte Analyse möglicher Risiken, unklarer Finanzierungen oder fehlender Aspekte.
+
+            ---
+            ## 📊 FAZIT & VERGLEICHSTABELLE
+            Erstelle eine übersichtliche Zusammenfassungstabelle zum direkten Vergleich aller gewählten Parteien:
+            Partei | Kernforderung / Hauptmaßnahme | Erwartete Wirkung | Haupthürde / Risiko
+            """
+
+            response_text = None
+            last_error = None
+
+            with st.spinner(f"Führe Echtzeit-Analyse für '{topic}' aus..."):
+                for model_name in MODELS_TO_TRY:
+                    try:
+                        res = client.models.generate_content(
+                            model=model_name,
+                            contents=[*active_g_files, prompt]
+                        )
+                        if res and res.text:
+                            response_text = res.text
+                            break
+                    except Exception as e:
+                        last_error = e
+                        continue
+
+            if response_text:
+                st.markdown(response_text)
+            else:
+                st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
