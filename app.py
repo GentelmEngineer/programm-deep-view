@@ -1,4 +1,5 @@
 import os
+import json
 import glob
 import streamlit as st
 from google import genai
@@ -46,7 +47,6 @@ if "uploaded_gemini_files" not in st.session_state:
 def get_cached_gemini_files(file_tuples):
     current_paths = {pdf_path for _, pdf_path, _ in file_tuples}
     
-    # Alte nicht mehr benötigte Dateien bei Gemini löschen
     for cached_path in list(st.session_state.uploaded_gemini_files.keys()):
         if cached_path not in current_paths:
             try:
@@ -58,52 +58,44 @@ def get_cached_gemini_files(file_tuples):
     gemini_files = []
     for party_name, pdf_path, _ in file_tuples:
         if pdf_path not in st.session_state.uploaded_gemini_files:
-            with st.spinner(f"Preloading PDF: {party_name}..."):
-                g_file = client.files.upload(file=pdf_path)
-                st.session_state.uploaded_gemini_files[pdf_path] = g_file
+            # Hier laden wir die PDFs hoch (passiert nur beim ersten Start oder Kategoriewechsel)
+            g_file = client.files.upload(file=pdf_path)
+            st.session_state.uploaded_gemini_files[pdf_path] = g_file
         gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
         
     return gemini_files
 
-# --- PRELOADED HOT TOPICS (STREAMLIT CACHED) ---
-@st.cache_data(show_spinner="Analysiere Dokumente & generiere Hot Topics vor...")
-def get_preloaded_hot_topics(file_tuples_keys, _api_key):
-    """
-    Berechnet die Hot Topics einmalig für das gesamte Set vor.
-    Wird durch st.cache_data im RAM gehalten.
-    """
-    temp_client = genai.Client(api_key=_api_key)
-    g_files = [st.session_state.uploaded_gemini_files[path] for _, path, _ in file_tuples_keys if path in st.session_state.uploaded_gemini_files]
-    if not g_files:
-        return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
-    
-    prompt = "Nenne 5-7 prägnante Hauptthemen/Schlagwörter dieser Parteiprogramme. Gib NUR eine kommagetrennte Liste zurück."
-    
-    for model_name in MODELS_TO_TRY:
+# --- LÄDT HOT TOPICS DIREKT AUS DER LOKALEN JSON (BLITZSCHNELL) ---
+def load_precomputed_hot_topics(category_path):
+    json_path = os.path.join(category_path, "hot_topics.json")
+    if os.path.exists(json_path):
         try:
-            res = temp_client.models.generate_content(
-                model=model_name,
-                contents=[*g_files, prompt]
-            )
-            if res and res.text:
-                return [t.strip() for t in res.text.split(",") if t.strip()]
+            with open(json_path, "r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception:
-            continue
-
+            pass
+    # Fallback falls JSON fehlt
     return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
 
-# --- SIDEBAR: KATEGORIE- AUSWAHL (FESTES SET AN STATT EINZELNER HÄKCHEN) ---
+# --- SIDEBAR: KATEGORIE- AUSWAHL ---
 st.sidebar.markdown("### [1] Wahl / Kategorie")
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
 selected_files = []
+selected_category_path = ""
+auto_topics = []
+
 if categories:
     category_map = {c.replace("_", " ").title(): c for c in categories}
     selected_label = st.sidebar.selectbox("Kategorie wählen:", list(category_map.keys()))
     selected_category = category_map[selected_label]
+    selected_category_path = os.path.join(DATA_DIR, selected_category)
     
-    # Automatisch ALLE PDFs dieser Kategorie als festes Set laden
-    all_pdf_paths = glob.glob(os.path.join(DATA_DIR, selected_category, "*.pdf"))
+    # Hot Topics sofort ohne Wartezeit aus JSON laden
+    auto_topics = load_precomputed_hot_topics(selected_category_path)
+    
+    # PDFs dieser Kategorie als festes Set laden
+    all_pdf_paths = glob.glob(os.path.join(selected_category_path, "*.pdf"))
     for pdf_path in sorted(all_pdf_paths):
         party_name = os.path.basename(pdf_path).replace(".pdf", "")
         pages = get_pdf_page_count(pdf_path)
@@ -117,7 +109,6 @@ if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
     st.markdown(f'<div class="pdf-info">Geladenes Parteien-Set: {info_str}</div>', unsafe_allow_html=True)
     
-    # PDFs einmalig hochladen/cachen
     active_g_files = get_cached_gemini_files(selected_files)
 else:
     st.warning("Keine PDFs in dieser Kategorie gefunden.")
@@ -127,13 +118,9 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# HOT TOPICS CHIPS (JETZT MIT PRELOADING)
-if selected_files:
-    st.markdown("### 🔥 Hot Topics (Vorgeladen)")
-    # Übergabe als Hashable tuple für den Cache
-    file_keys_tuple = tuple([(p[0], p[1], p[2]) for p in selected_files])
-    auto_topics = get_preloaded_hot_topics(file_keys_tuple, api_key)
-    
+# HOT TOPICS CHIPS (SOFORT DA OHNE API-WARTEZEIT)
+if selected_files and auto_topics:
+    st.markdown("### 🔥 Hot Topics")
     cols = st.columns(min(len(auto_topics), 7))
     for idx, top_name in enumerate(auto_topics):
         if cols[idx % len(cols)].button(f"📌 {top_name}", key=f"ht_btn_{idx}"):
