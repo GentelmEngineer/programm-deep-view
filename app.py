@@ -11,10 +11,54 @@ st.set_page_config(page_title="VoteCore", page_icon="⚡", layout="wide")
 st.markdown("""
 <style>
     html, body, [class*="css"] { font-family: 'Courier New', Courier, monospace !important; }
-    .title-text { font-size: 2.5rem; font-weight: 700; color: #00FF66; margin-bottom: 0px; }
-    .sub-text { color: #8B949E; font-size: 0.9rem; margin-bottom: 15px; }
+    
+    /* Titel-Box mit minimalistischen Ecken-Streifen */
+    .title-box {
+        position: relative;
+        padding: 20px 25px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background-color: rgba(255, 255, 255, 0.02);
+        margin-bottom: 20px;
+        border-radius: 4px;
+    }
+    /* Ecken-Streifen (Tech-Minimalismus) */
+    .title-box::before, .title-box::after {
+        content: '';
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        border-color: #ffffff;
+        border-style: solid;
+    }
+    .title-box::before {
+        top: -1px;
+        left: -1px;
+        border-width: 2px 0 0 2px;
+    }
+    .title-box::after {
+        bottom: -1px;
+        right: -1px;
+        border-width: 0 2px 2px 0;
+    }
+    
+    .title-text { font-size: 2.5rem; font-weight: 700; color: #ffffff; margin-bottom: 0px; letter-spacing: 1px; }
+    .sub-text { color: #8B949E; font-size: 0.9rem; margin-top: 5px; margin-bottom: 0px; }
     .pdf-info { color: #58A6FF; font-size: 0.85rem; margin-bottom: 15px; }
-    .stButton>button { background-color: #238636 !important; color: #ffffff !important; border: 1px solid #2EA043 !important; width: 100%; border-radius: 6px; font-weight: bold; }
+    
+    /* Buttons in edlem Weiß / Dunkel-Look */
+    .stButton>button { 
+        background-color: #161b22 !important; 
+        color: #ffffff !important; 
+        border: 1px solid #30363d !important; 
+        width: 100%; 
+        border-radius: 6px; 
+        font-weight: bold; 
+    }
+    .stButton>button:hover {
+        background-color: #21262d !important;
+        border-color: #8b949e !important;
+    }
+    
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: transparent; color: #8B949E; text-align: right; padding-right: 20px; font-size: 0.75rem; }
 </style>
 """, unsafe_allow_html=True)
@@ -147,9 +191,13 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
-# --- HEADER & TITEL ---
-st.markdown('<div class="title-text">> VoteCore</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen</div>', unsafe_allow_html=True)
+# --- HEADER & TITEL IN DER MINIMALISTISCHEN BOX ---
+st.markdown("""
+<div class="title-box">
+    <div class="title-text">VoteCore</div>
+    <div class="sub-text">Deep-Analysis von Parteiprogrammen</div>
+</div>
+""", unsafe_allow_html=True)
 
 # --- WAHLORDNER / KATEGORIE AUSWAHL OBEN ---
 DATA_DIR = "data"
@@ -191,7 +239,6 @@ if selected_files:
     file_keys_tuple = tuple([(p[0], p[1], p[2]) for p in selected_files])
     auto_topics = get_hot_topics(file_keys_tuple, selected_category_path, api_key)
     
-    # 5 Spalten für den vollen Kachel-Look über die Fensterbreite
     cols = st.columns(len(auto_topics) if len(auto_topics) > 0 else 5)
     for idx, top_name in enumerate(auto_topics):
         with cols[idx]:
@@ -298,7 +345,7 @@ if st.button("Starte die Analyse"):
 
             ---
             ## 📊 FAZIT & VERGLEICHSTABELLE
-            Erstelle eine übersichtliche Zusammenfassungstabelle zum direktem Vergleich aller gewählten Parteien:
+            Erstelle eine übersichtliche Zusammenfassungstabelle zum direkten Vergleich aller gewählten Parteien:
             Partei | Kernforderung / Hauptmaßnahme | Erwartete Wirkung | Haupthürde / Risiko
             """
 
