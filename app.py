@@ -6,7 +6,7 @@ from google import genai
 import pypdf
 
 # Layout & Styling
-st.set_page_config(page_title="PDV V1.1 (Lightning Fast)", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="PDV V1.1 (Smart Cache)", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -27,8 +27,7 @@ client = genai.Client(api_key=api_key)
 DATA_DIR = "data"
 
 MODELS_TO_TRY = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
+    "gemini-2.5-flash",
     "gemini-3.5-flash-lite"
 ]
 
@@ -60,7 +59,7 @@ def get_cached_gemini_files(file_tuples):
         gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
     return gemini_files
 
-# --- LÄDT HOT TOPICS & FERTIGE ANALYSEN AUS JSON ---
+# --- LÄDT HOT TOPICS & FERTIGE ANALYSEN ---
 def load_precomputed_data(category_path):
     topics = ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
     analyses = {}
@@ -83,6 +82,24 @@ def load_precomputed_data(category_path):
             
     return topics, analyses
 
+# Speichert neue Analysen direkt in die JSON-Datei im Ordner
+def save_analysis_to_json(category_path, topic, analysis_text):
+    an_path = os.path.join(category_path, "hot_topic_analyses.json")
+    analyses = {}
+    if os.path.exists(an_path):
+        try:
+            with open(an_path, "r", encoding="utf-8") as f:
+                analyses = json.load(f)
+        except Exception:
+            pass
+    
+    analyses[topic] = analysis_text
+    try:
+        with open(an_path, "w", encoding="utf-8") as f:
+            json.dump(analyses, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Konnte Analyse nicht lokal cachen: {e}")
+
 # --- SIDEBAR: KATEGORIE- AUSWAHL ---
 st.sidebar.markdown("### [1] Wahl / Kategorie")
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
@@ -90,6 +107,7 @@ categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA
 selected_files = []
 auto_topics = []
 precomputed_analyses = {}
+selected_category_path = ""
 
 if categories:
     category_map = {c.replace("_", " ").title(): c for c in categories}
@@ -97,7 +115,6 @@ if categories:
     selected_category = category_map[selected_label]
     selected_category_path = os.path.join(DATA_DIR, selected_category)
     
-    # Sofortiger Ladevorgang aus den JSON-Dateien
     auto_topics, precomputed_analyses = load_precomputed_data(selected_category_path)
     
     all_pdf_paths = glob.glob(os.path.join(selected_category_path, "*.pdf"))
@@ -107,8 +124,8 @@ if categories:
         selected_files.append((party_name, pdf_path, pages))
 
 # --- HEADER ---
-st.markdown('<div class="title-text">> PDV V1.1 (Lightning Fast)</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Vorgeladene & Instant-Analysen von Parteiprogrammen</div>', unsafe_allow_html=True)
+st.markdown('<div class="title-text">> PDV V1.1 (Smart Cache)</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-text">Intelligente Parteiprogramm-Analyse mit Selbst-Caching</div>', unsafe_allow_html=True)
 
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
@@ -124,7 +141,7 @@ if "selected_topic" not in st.session_state:
 
 # HOT TOPICS CHIPS
 if selected_files and auto_topics:
-    st.markdown("### 🔥 Hot Topics (Instant)")
+    st.markdown("### 🔥 Hot Topics (Instant wenn gecached)")
     cols = st.columns(min(len(auto_topics), 7))
     for idx, top_name in enumerate(auto_topics):
         if cols[idx % len(cols)].button(f"📌 {top_name}", key=f"ht_btn_{idx}"):
@@ -142,11 +159,12 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
     else:
         st.markdown("---")
         
-        # 1. PRÜFEN OB FERTIGE ANALYSE VORHANDEN IST (INSTANT)
+        # 1. PRÜFEN OB BEREITS GESPEICHERT (CACHE)
         if topic in precomputed_analyses:
+            st.info(⚡ Lade fertige Analyse aus dem System-Cache...")
             st.markdown(precomputed_analyses[topic])
         else:
-            # 2. FALLBACK: LIVE-API CALL FÜR NEUE / INDIVIDUELLE THEMEN
+            # 2. LIVE-API CALL (BEim ersten Mal)
             prompt = f"""
             Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
             
@@ -177,7 +195,7 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
             response_text = None
             last_error = None
 
-            with st.spinner(f"Führe Echtzeit-Analyse für '{topic}' aus..."):
+            with st.spinner(f"Führe Erstanalyse für '{topic}' aus und speichere ab..."):
                 for model_name in MODELS_TO_TRY:
                     try:
                         res = client.models.generate_content(
@@ -193,5 +211,7 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
 
             if response_text:
                 st.markdown(response_text)
+                # Direkt in die JSON-Datei schreiben, damit es ab sofort fix da ist!
+                save_analysis_to_json(selected_category_path, topic, response_text)
             else:
                 st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
