@@ -12,16 +12,15 @@ st.markdown("""
 <style>
     html, body, [class*="css"] { font-family: 'Courier New', Courier, monospace !important; }
     
-    /* Titel-Box mit minimalistischen Ecken-Streifen */
+    /* Titel-Box mit weißgrauem Hintergrund & Ecken-Streifen */
     .title-box {
         position: relative;
         padding: 20px 25px;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        background-color: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        background-color: #161b22;
         margin-bottom: 20px;
-        border-radius: 4px;
+        border-radius: 6px;
     }
-    /* Ecken-Streifen (Tech-Minimalismus) */
     .title-box::before, .title-box::after {
         content: '';
         position: absolute;
@@ -43,7 +42,17 @@ st.markdown("""
     
     .title-text { font-size: 2.5rem; font-weight: 700; color: #ffffff; margin-bottom: 0px; letter-spacing: 1px; }
     .sub-text { color: #8B949E; font-size: 0.9rem; margin-top: 5px; margin-bottom: 0px; }
-    .pdf-info { color: #58A6FF; font-size: 0.85rem; margin-bottom: 15px; }
+    
+    /* PDF-Info Box mit Weißgrau-Hintergrund */
+    .pdf-info { 
+        background-color: #161b22; 
+        border: 1px solid rgba(255, 255, 255, 0.15); 
+        padding: 10px 15px; 
+        border-radius: 6px; 
+        color: #C9D1D9; 
+        font-size: 0.85rem; 
+        margin-bottom: 15px; 
+    }
     
     /* Buttons in edlem Weiß / Dunkel-Look */
     .stButton>button { 
@@ -71,7 +80,6 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 DATA_DIR = "data"
 
-# Modell-Reihenfolge
 MODELS_TO_TRY = [
     "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
@@ -107,7 +115,6 @@ def get_cached_gemini_files(file_tuples):
         gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
     return gemini_files
 
-# --- HOT TOPICS MIT LOKALEM CACHE (JSON) ---
 def load_cached_hot_topics(category_path):
     ht_path = os.path.join(category_path, "hot_topics.json")
     if os.path.exists(ht_path):
@@ -191,7 +198,7 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
-# --- HEADER & TITEL IN DER MINIMALISTISCHEN BOX ---
+# --- HEADER & TITEL ---
 st.markdown("""
 <div class="title-box">
     <div class="title-text">VoteCore</div>
@@ -233,13 +240,15 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# --- HOT TOPICS ALS KACHEL-LOOK (GRID) ---
+# --- HOT TOPICS ALS FLIESSENDE KACHELN (Wird bei Fensterende umgebrochen) ---
 if selected_files:
     st.markdown("### 🔥 Hot Topics")
     file_keys_tuple = tuple([(p[0], p[1], p[2]) for p in selected_files])
     auto_topics = get_hot_topics(file_keys_tuple, selected_category_path, api_key)
     
-    cols = st.columns(len(auto_topics) if len(auto_topics) > 0 else 5)
+    # Dynamisches Wrap-Layout über Spalten
+    num_topics = len(auto_topics) if len(auto_topics) > 0 else 5
+    cols = st.columns(num_topics)
     for idx, top_name in enumerate(auto_topics):
         with cols[idx]:
             if st.button(f"📌 {top_name}", key=f"ht_btn_{idx}DATA"):
