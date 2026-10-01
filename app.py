@@ -62,16 +62,44 @@ def get_cached_gemini_files(file_tuples):
         gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
     return gemini_files
 
-# --- HOT TOPICS (Genau 5 Stück) ---
-@st.cache_data(show_spinner="Ermittle Hot Topics...")
-def get_hot_topics(file_tuples, _api_key):
+# --- HOT TOPICS MIT LOKALEM CACHE (JSON) ---
+def load_cached_hot_topics(category_path):
+    ht_path = os.path.join(category_path, "hot_topics.json")
+    if os.path.exists(ht_path):
+        try:
+            with open(ht_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list) and len(data) > 0:
+                    return data
+        except Exception:
+            pass
+    return None
+
+def save_hot_topics_to_json(category_path, topics):
+    ht_path = os.path.join(category_path, "hot_topics.json")
+    try:
+        with open(ht_path, "w", encoding="utf-8") as f:
+            json.dump(topics, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Konnte Hot Topics nicht cachen: {e}")
+
+def get_hot_topics(file_tuples, category_path, _api_key):
+    # 1. Prüfen ob bereits lokal gespeichert
+    cached_topics = load_cached_hot_topics(category_path)
+    if cached_topics:
+        return cached_topics
+
+    # 2. Wenn nicht, über API generieren
     temp_client = genai.Client(api_key=_api_key)
     g_files = [st.session_state.uploaded_gemini_files[path] for _, path, _ in file_tuples if path in st.session_state.uploaded_gemini_files]
+    
+    fallback_topics = ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
     if not g_files:
-        return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
+        return fallback_topics
     
     prompt = "Nenne exakt 5 prägnante Hauptthemen/Schlagwörter dieser Parteiprogramme. Gib NUR eine kommaseparierte Liste zurück."
     
+    generated_topics = None
     for model_name in MODELS_TO_TRY:
         try:
             res = temp_client.models.generate_content(
@@ -79,11 +107,19 @@ def get_hot_topics(file_tuples, _api_key):
                 contents=[*g_files, prompt]
             )
             if res and res.text:
-                return [t.strip() for t in res.text.split(",") if t.strip()][:5]
+                parsed = [t.strip() for t in res.text.split(",") if t.strip()][:5]
+                if len(parsed) >= 3:  # Validieren, dass es sinnvolle Ergebnisse sind
+                    generated_topics = parsed
+                    break
         except Exception:
             continue
 
-    return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
+    if not generated_topics:
+        generated_topics = fallback_topics
+
+    # 3. Direkt lokal für diese Wahl/Kategorie abspeichern
+    save_hot_topics_to_json(category_path, generated_topics)
+    return generated_topics
 
 def load_precomputed_analyses(category_path):
     analyses = {}
@@ -113,7 +149,7 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
-# --- SIDEBAR: KATEGORIE- AUSWAHL ---
+# --- SIDEBAR: KATEGORIE- AUSWAHL & ADMIN-CACHE-RESET ---
 st.sidebar.markdown("### [1] Wahl / Kategorie")
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
@@ -135,6 +171,26 @@ if categories:
     
     precomputed_analyses = load_precomputed_analyses(selected_category_path)
 
+    # --- ADMIN BUTTON: Cache zurücksetzen ---
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🛠️ Admin Steuerung")
+    if st.sidebar.button("🗑️ Cache für diese Wahl leeren"):
+        ht_file = os.path.join(selected_category_path, "hot_topics.json")
+        an_file = os.path.join(selected_category_path, "hot_topic_analyses.json")
+        
+        cleared_items = []
+        if os.path.exists(ht_file):
+            os.remove(ht_file)
+            cleared_items.append("Hot Topics")
+        if os.path.exists(an_file):
+            os.remove(an_file)
+            cleared_items.append("Analysen")
+            
+        if cleared_items:
+            st.sidebar.success(f"Cache geleert: {', '.join(cleared_items)}! Bitte Seite neu laden.")
+        else:
+            st.sidebar.info("Kein Cache zum Löschen vorhanden.")
+
 # --- HEADER ---
 st.markdown('<div class="title-text">> PDV V1.1</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen</div>', unsafe_allow_html=True)
@@ -151,11 +207,11 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# HOT TOPICS
+# HOT TOPICS LADEN (Aus lokalem Cache oder Generierung beim ersten Mal)
 if selected_files:
     st.markdown("### 🔥 Hot Topics")
     file_keys_tuple = tuple([(p[0], p[1], p[2]) for p in selected_files])
-    auto_topics = get_hot_topics(file_keys_tuple, api_key)
+    auto_topics = get_hot_topics(file_keys_tuple, selected_category_path, api_key)
     
     cols = st.columns(min(len(auto_topics), 5))
     for idx, top_name in enumerate(auto_topics):
