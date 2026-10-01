@@ -5,7 +5,7 @@ from google import genai
 import pypdf
 
 # Layout & Styling
-st.set_page_config(page_title="PDV V1.1 (Fast Stream)", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="PDV V1.1 (High Performance)", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -26,7 +26,6 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 DATA_DIR = "data"
 
-# Festgelegte Modell-Reihenfolge
 MODELS_TO_TRY = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -40,14 +39,14 @@ def get_pdf_page_count(filepath):
     except Exception:
         return "?"
 
-# --- CACHING DER UPLOADS IM SESSION STATE ---
+# --- UPLOAD & SESSION CACHING ---
 if "uploaded_gemini_files" not in st.session_state:
     st.session_state.uploaded_gemini_files = {}
 
 def get_cached_gemini_files(file_tuples):
     current_paths = {pdf_path for _, pdf_path, _ in file_tuples}
     
-    # Alte Uploads löschen, die nicht mehr ausgewählt sind
+    # Alte nicht mehr benötigte Dateien bei Gemini löschen
     for cached_path in list(st.session_state.uploaded_gemini_files.keys()):
         if cached_path not in current_paths:
             try:
@@ -56,22 +55,25 @@ def get_cached_gemini_files(file_tuples):
                 pass
             del st.session_state.uploaded_gemini_files[cached_path]
 
-    # Neue PDFs hochladen, falls noch nicht gecached
     gemini_files = []
     for party_name, pdf_path, _ in file_tuples:
         if pdf_path not in st.session_state.uploaded_gemini_files:
-            with st.spinner(f"Lade PDF hoch: {party_name}..."):
+            with st.spinner(f"Preloading PDF: {party_name}..."):
                 g_file = client.files.upload(file=pdf_path)
                 st.session_state.uploaded_gemini_files[pdf_path] = g_file
         gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
         
     return gemini_files
 
-# --- HOT TOPICS GENERIERUNG (MIT MODELL-FALLBACK) ---
-@st.cache_data(show_spinner="Ermittle Hot Topics...")
-def get_hot_topics(file_tuples, _api_key):
+# --- PRELOADED HOT TOPICS (STREAMLIT CACHED) ---
+@st.cache_data(show_spinner="Analysiere Dokumente & generiere Hot Topics vor...")
+def get_preloaded_hot_topics(file_tuples_keys, _api_key):
+    """
+    Berechnet die Hot Topics einmalig für das gesamte Set vor.
+    Wird durch st.cache_data im RAM gehalten.
+    """
     temp_client = genai.Client(api_key=_api_key)
-    g_files = [st.session_state.uploaded_gemini_files[path] for _, path, _ in file_tuples if path in st.session_state.uploaded_gemini_files]
+    g_files = [st.session_state.uploaded_gemini_files[path] for _, path, _ in file_tuples_keys if path in st.session_state.uploaded_gemini_files]
     if not g_files:
         return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
     
@@ -90,47 +92,47 @@ def get_hot_topics(file_tuples, _api_key):
 
     return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
 
-# --- SIDEBAR & PARTEIAUSWAHL ---
-st.sidebar.markdown("### [1] Wahl auswählen")
+# --- SIDEBAR: KATEGORIE- AUSWAHL (FESTES SET AN STATT EINZELNER HÄKCHEN) ---
+st.sidebar.markdown("### [1] Wahl / Kategorie")
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
 selected_files = []
 if categories:
     category_map = {c.replace("_", " ").title(): c for c in categories}
-    selected_label = st.sidebar.selectbox("Kategorie:", list(category_map.keys()))
+    selected_label = st.sidebar.selectbox("Kategorie wählen:", list(category_map.keys()))
     selected_category = category_map[selected_label]
     
+    # Automatisch ALLE PDFs dieser Kategorie als festes Set laden
     all_pdf_paths = glob.glob(os.path.join(DATA_DIR, selected_category, "*.pdf"))
-    
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### [2] Parteien auswählen")
     for pdf_path in sorted(all_pdf_paths):
         party_name = os.path.basename(pdf_path).replace(".pdf", "")
         pages = get_pdf_page_count(pdf_path)
-        if st.sidebar.checkbox(f"{party_name} ({pages} S.)", value=True, key=pdf_path):
-            selected_files.append((party_name, pdf_path, pages))
+        selected_files.append((party_name, pdf_path, pages))
 
 # --- HEADER ---
-st.markdown('<div class="title-text">> PDV V1.1 (Ultra-Fast Stream)</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen in Echtzeit</div>', unsafe_allow_html=True)
+st.markdown('<div class="title-text">> PDV V1.1 (High Performance)</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-text">Vorgeladene Deep-Analysis von Parteiprogrammen</div>', unsafe_allow_html=True)
 
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
-    st.markdown(f'<div class="pdf-info">Ausgewählte Programme: {info_str}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="pdf-info">Geladenes Parteien-Set: {info_str}</div>', unsafe_allow_html=True)
+    
+    # PDFs einmalig hochladen/cachen
     active_g_files = get_cached_gemini_files(selected_files)
 else:
-    st.warning("Bitte wähle mindestens eine Partei aus.")
+    st.warning("Keine PDFs in dieser Kategorie gefunden.")
 
 st.markdown("---")
 
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# HOT TOPICS CHIPS
+# HOT TOPICS CHIPS (JETZT MIT PRELOADING)
 if selected_files:
-    st.markdown("### 🔥 Hot Topics")
-    files_tuple = tuple(selected_files)
-    auto_topics = get_hot_topics(files_tuple, api_key)
+    st.markdown("### 🔥 Hot Topics (Vorgeladen)")
+    # Übergabe als Hashable tuple für den Cache
+    file_keys_tuple = tuple([(p[0], p[1], p[2]) for p in selected_files])
+    auto_topics = get_preloaded_hot_topics(file_keys_tuple, api_key)
     
     cols = st.columns(min(len(auto_topics), 7))
     for idx, top_name in enumerate(auto_topics):
@@ -145,61 +147,55 @@ topic = st.text_input("Thema eingeben oder oben ein Hot Topic anklicken:", value
 
 if st.button("ANALYSEN_STARTEN [ENTER]"):
     if not selected_files or not topic:
-        st.warning("Bitte wähle Parteien und ein Thema aus.")
+        st.warning("Bitte wähle ein Thema aus.")
     else:
         st.markdown("---")
         
         prompt = f"""
-        Vergleiche neutral die Vorhaben der Parteien zum Thema: {topic}
+        Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
+        
         REGELN:
         1. Nutze AUSSCHLIESSLICH Informationen aus den hochgeladenen Parteiprogrammen.
-        2. Halte dich EXTREM kurz und präzise (maximal 3 Stichpunkte pro Kategorie).
-        3. Falls eine Partei dazu nichts sagt, schreibe: "Wird im Parteiprogramm nicht erwähnt."
-        
-        Antworte im Markdown-Format:
+        2. Gehe ins Detail und erläutere die jeweiligen Maßnahmen und Positionen umfassend.
+        3. Führe Belege und Quellenangaben an, sofern im Text auffindbar [Quelle: Dateiname.pdf, S. X].
+        4. Falls eine Partei zu dem Thema keine Aussagen trifft, gib dies explizit an.
+
+        Antworte im Markdown-Format wie folgt:
+
         ## [PARTEI NAME]
-        ### 1. WAS GEPLANT IST
-        - Ziel [Quelle: Dateiname.pdf, S. X]
-        ### 2. CHANCEN
-        - Positiver Effekt
-        ### 3. RISIKEN & LÜCKEN
-        - Risiko / Lücke
-        
+        ### 1. GEPLANTE MASSNAHMEN & POSITIONEN
+        - Ausführliche Beschreibung der konkreten Ziele, Forderungen und Vorhaben.
+
+        ### 2. CHANCEN & POTENZIALE
+        - Detaillierte Analyse der positiven Effekte und Chancen dieser Maßnahmen.
+
+        ### 3. RISIKEN, LÜCKEN & KRITIKPUNKTE
+        - Fundierte Analyse möglicher Risiken, unklarer Finanzierungen oder fehlender Aspekte.
+
         ---
-        ## 📊 FAZIT-TABELLE
-        Partei | Hauptmaßnahme | Positiver Effekt | Hauptrisiko
+        ## 📊 FAZIT & VERGLEICHSTABELLE
+        Erstelle eine übersichtliche Zusammenfassungstabelle zum direkten Vergleich aller gewählten Parteien:
+        Partei | Kernforderung / Hauptmaßnahme | Erwartete Wirkung | Haupthürde / Risiko
         """
 
-        # STATUS ANZEIGE + SOFORTIGES FEEDBACK BEIM STREAMING
-        status_container = st.empty()
-        
-        def stream_with_status():
-            last_error = None
+        response_text = None
+        last_error = None
+
+        with st.spinner(f"Führe Echtzeit-Analyse für '{topic}' aus..."):
             for model_name in MODELS_TO_TRY:
-                status_container.info(f"⏳ Verbinde mit `{model_name}`...")
                 try:
-                    response_stream = client.models.generate_content_stream(
+                    res = client.models.generate_content(
                         model=model_name,
                         contents=[*active_g_files, prompt]
                     )
-                    
-                    # Versuche den ersten Chunk zu lesen, um zu bestätigen, dass das Modell antwortet
-                    stream_iter = iter(response_stream)
-                    first_chunk = next(stream_iter, None)
-                    
-                    if first_chunk and first_chunk.text:
-                        status_container.empty() # Statusleiste entfernen, wenn Text fließt
-                        yield first_chunk.text
-                        for chunk in stream_iter:
-                            if chunk.text:
-                                yield chunk.text
-                        return  # Erfolgreich fertig
+                    if res and res.text:
+                        response_text = res.text
+                        break
                 except Exception as e:
                     last_error = e
-                    status_container.warning(f"⚠️ Modell `{model_name}` nicht erreichbar. Versuche Nächstes...")
                     continue
-            
-            status_container.error(f"❌ Keines der Modelle konnte eine Antwort liefern: {last_error}")
 
-        # Ausführen & Anzeigen
-        st.write_stream(stream_with_status)
+        if response_text:
+            st.markdown(response_text)
+        else:
+            st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
