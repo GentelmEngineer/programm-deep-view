@@ -84,12 +84,10 @@ def save_hot_topics_to_json(category_path, topics):
         print(f"Konnte Hot Topics nicht cachen: {e}")
 
 def get_hot_topics(file_tuples, category_path, _api_key):
-    # 1. Prüfen ob bereits lokal gespeichert
     cached_topics = load_cached_hot_topics(category_path)
     if cached_topics:
         return cached_topics
 
-    # 2. Wenn nicht, über API generieren
     temp_client = genai.Client(api_key=_api_key)
     g_files = [st.session_state.uploaded_gemini_files[path] for _, path, _ in file_tuples if path in st.session_state.uploaded_gemini_files]
     
@@ -108,7 +106,7 @@ def get_hot_topics(file_tuples, category_path, _api_key):
             )
             if res and res.text:
                 parsed = [t.strip() for t in res.text.split(",") if t.strip()][:5]
-                if len(parsed) >= 3:  # Validieren, dass es sinnvolle Ergebnisse sind
+                if len(parsed) >= 3:
                     generated_topics = parsed
                     break
         except Exception:
@@ -117,7 +115,6 @@ def get_hot_topics(file_tuples, category_path, _api_key):
     if not generated_topics:
         generated_topics = fallback_topics
 
-    # 3. Direkt lokal für diese Wahl/Kategorie abspeichern
     save_hot_topics_to_json(category_path, generated_topics)
     return generated_topics
 
@@ -149,7 +146,7 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
-# --- SIDEBAR: KATEGORIE- AUSWAHL & ADMIN-CACHE-RESET ---
+# --- SIDEBAR: KATEGORIE- AUSWAHL ---
 st.sidebar.markdown("### [1] Wahl / Kategorie")
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
@@ -171,26 +168,6 @@ if categories:
     
     precomputed_analyses = load_precomputed_analyses(selected_category_path)
 
-    # --- ADMIN BUTTON: Cache zurücksetzen ---
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🛠️ Admin Steuerung")
-    if st.sidebar.button("🗑️ Cache für diese Wahl leeren"):
-        ht_file = os.path.join(selected_category_path, "hot_topics.json")
-        an_file = os.path.join(selected_category_path, "hot_topic_analyses.json")
-        
-        cleared_items = []
-        if os.path.exists(ht_file):
-            os.remove(ht_file)
-            cleared_items.append("Hot Topics")
-        if os.path.exists(an_file):
-            os.remove(an_file)
-            cleared_items.append("Analysen")
-            
-        if cleared_items:
-            st.sidebar.success(f"Cache geleert: {', '.join(cleared_items)}! Bitte Seite neu laden.")
-        else:
-            st.sidebar.info("Kein Cache zum Löschen vorhanden.")
-
 # --- HEADER ---
 st.markdown('<div class="title-text">> PDV V1.1</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen</div>', unsafe_allow_html=True)
@@ -207,7 +184,7 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# HOT TOPICS LADEN (Aus lokalem Cache oder Generierung beim ersten Mal)
+# HOT TOPICS
 if selected_files:
     st.markdown("### 🔥 Hot Topics")
     file_keys_tuple = tuple([(p[0], p[1], p[2]) for p in selected_files])
@@ -232,10 +209,9 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
         
         is_hot_topic = (topic in auto_topics)
         
-        # Falls Hot Topic im Cache liegt, direkt über das Accordion ausgeben
-        if is_hot_topic and topic in precomputed_analyses:
-            cached_text = precomputed_analyses[topic]
-            parts = cached_text.split("## ")
+        # Render-Hilfsfunktion für die neue Struktur
+        def render_analysis_text(full_text):
+            parts = full_text.split("## ")
             for part in parts:
                 if not part.strip():
                     continue
@@ -245,55 +221,84 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                     
                 lines = part.split("\n")
                 party_title = lines[0].strip()
-                main_statement = "Keine Kernposition verfügbar."
-                detail_content = []
                 
-                capturing = False
+                # Wir parsen die Bereiche für Maßnahmen sowie Chancen/Risiken
+                massnahme_summary = "Keine Kurzzusammenfassung verfügbar."
+                massnahme_details = []
+                chance_summary = "Keine Kurzzusammenfassung verfügbar."
+                chance_details = []
+                risiko_summary = "Keine Kurzzusammenfassung verfügbar."
+                risiko_details = []
+                
+                current_section = ""
                 for line in lines[1:]:
-                    if "KERN_AUSSAGE:" in line:
-                        main_statement = line.replace("**KERN_AUSSAGE:**", "").strip()
-                    elif "**DETAILS_START**" in line:
-                        capturing = True
+                    if "MASSNAHMEN_SUMMARY:" in line:
+                        massnahme_summary = line.replace("**MASSNAHMEN_SUMMARY:**", "").strip()
+                        current_section = "massnahmen"
                         continue
-                    elif "**DETAILS_END**" in line:
-                        capturing = False
+                    elif "CHANCEN_SUMMARY:" in line:
+                        chance_summary = line.replace("**CHANCEN_SUMMARY:**", "").strip()
+                        current_section = "chancen"
+                        continue
+                    elif "RISIKEN_SUMMARY:" in line:
+                        risiko_summary = line.replace("**RISIKEN_SUMMARY:**", "").strip()
+                        current_section = "risiken"
                         continue
                     
-                    if capturing:
-                        detail_content.append(line)
+                    if current_section == "massnahmen" and line.strip():
+                        massnahme_details.append(line)
+                    elif current_section == "chancen" and line.strip():
+                        chance_details.append(line)
+                    elif current_section == "risiken" and line.strip():
+                        risiko_details.append(line)
                 
+                # UI-Ausgabe Ebene 1: Partei
                 st.markdown(f"### {party_title}")
-                st.markdown(f"**Kernposition:** {main_statement}")
                 
-                with st.expander("➕ Detaillierte Maßnahmen, Chancen & Risiken anzeigen"):
-                    st.markdown("\n".join(detail_content))
+                # Stichpunkt Maßnahmen + Aufklapper
+                st.markdown(f"- **Detaillierte Maßnahmen:** {massnahme_summary}")
+                with st.expander("➕ Mehr Details & Quellen zu Maßnahmen"):
+                    st.markdown("\n".join(massnahme_details))
+                
+                # Stichpunkt Chancen + Aufklapper
+                st.markdown(f"- **Chancen:** {chance_summary}")
+                with st.expander("➕ Mehr Details & Quellen zu Chancen"):
+                    st.markdown("\n".join(chance_details))
+                
+                # Stichpunkt Risiken + Aufklapper
+                st.markdown(f"- **Risiken & Lücken:** {risiko_summary}")
+                with st.expander("➕ Mehr Details & Quellen zu Risiken & Lücken"):
+                    st.markdown("\n".join(risiko_details))
                 
                 st.markdown("---")
+
+        if is_hot_topic and topic in precomputed_analyses:
+            render_analysis_text(precomputed_analyses[topic])
         else:
+            # Neuer strukturierter Prompt für die präzisen Stichpunkte + Detail-Blöcke
             prompt = f"""
             Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
             
             REGELN:
             1. Nutze AUSSCHLIESSLICH Informationen aus den hochgeladenen Parteiprogrammen.
-            2. Erstelle für jede Partei als ersten Satz eine prägnante **KERN_AUSSAGE (Main Statement)**, die die Grundhaltung auf den Punkt bringt.
-            3. Führe Belege und Quellenangaben an, sofern im Text auffindbar [Quelle: Dateiname.pdf, S. X].
-            4. Falls eine Partei zu dem Thema keine Aussagen trifft, gib dies explizit an.
+            2. Erstelle für jede Kategorie einen prägnanten Kurzsatz (Stichpunkt-Einleitung) und liefere dahinter im Detail-Block die tiefen Ausführungen inkl. Quellenangaben [Quelle: Dateiname.pdf, S. X].
+            3. Falls eine Partei zu dem Thema keine Aussagen trifft, gib dies explizit an.
 
-            Antworte strikt im folgenden Markdown-Format, damit es in programmatische Blöcke gegliedert werden kann:
+            Antworte strikt im folgenden Markdown-Format:
 
             ## [PARTEI NAME]
-            **KERN_AUSSAGE:** [Hier ein prägnanter Satz zur Kernposition der Partei]
+            **MASSNAHMEN_SUMMARY:** [Ein kurzer, aussagekräftiger Satz als Stichpunkt über die Hauptmaßnahmen]
+            - **Detaillierte Vorhaben & Belege:**
+              - Ausführliche Beschreibungpunkt 1 [Quelle: ...]
+              - Ausführliche Beschreibungpunkt 2 [Quelle: ...]
 
-            **DETAILS_START**
-            ### Geplante Maßnahmen & Positionen
-            - Ausführliche Beschreibung der konkreten Ziele und Vorhaben.
+            **CHANCEN_SUMMARY:** [Ein kurzer, aussagekräftiger Satz als Stichpunkt über die Hauptchancen]
+            - **Detaillierte Potenziale & Belege:**
+              - Ausführliche Analysepunkt 1 [Quelle: ...]
 
-            ### Chancen & Potenziale
-            - Detaillierte Analyse der positiven Effekte.
-
-            ### Risiken, Lücken & Kritikpunkte
-            - Fundierte Analyse möglicher Risiken oder fehlender Aspekte.
-            **DETAILS_END**
+            **RISIKEN_SUMMARY:** [Ein kurzer, aussagekräftiger Satz als Stichpunkt über die Hauptrisiken/Lücken]
+            - **Detaillierte Risiken, Lücken & Kritik:**
+              - Ausführliche Analysepunkt 1 [Quelle: ...]
 
             ---
             ## 📊 FAZIT & VERGLEICHSTABELLE
@@ -319,46 +324,9 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                         continue
 
             if response_text:
-                parts = response_text.split("## ")
-                
-                for part in parts:
-                    if not part.strip():
-                        continue
-                    if part.startswith("📊"):
-                        st.markdown("## 📊 " + part.replace("📊", ""))
-                        continue
-                        
-                    lines = part.split("\n")
-                    party_title = lines[0].strip()
-                    
-                    main_statement = "Keine Kernposition verfügbar."
-                    detail_content = []
-                    
-                    capturing = False
-                    for line in lines[1:]:
-                        if "KERN_AUSSAGE:" in line:
-                            main_statement = line.replace("**KERN_AUSSAGE:**", "").strip()
-                        elif "**DETAILS_START**" in line:
-                            capturing = True
-                            continue
-                        elif "**DETAILS_END**" in line:
-                            capturing = False
-                            continue
-                        
-                        if capturing:
-                            detail_content.append(line)
-                    
-                    st.markdown(f"### {party_title}")
-                    st.markdown(f"**Kernposition:** {main_statement}")
-                    
-                    with st.expander("➕ Detaillierte Maßnahmen, Chancen & Risiken anzeigen"):
-                        st.markdown("\n".join(detail_content))
-                    
-                    st.markdown("---")
+                render_analysis_text(response_text)
 
-                # Caching nur für Hot Topics
                 if is_hot_topic:
                     save_analysis_to_json(selected_category_path, topic, response_text)
-                    
             else:
                 st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
