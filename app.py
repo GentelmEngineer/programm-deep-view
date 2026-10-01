@@ -6,15 +6,16 @@ from google import genai
 import pypdf
 
 # Layout & Styling
-st.set_page_config(page_title="PDV V1.1", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="VoteCore", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
     html, body, [class*="css"] { font-family: 'Courier New', Courier, monospace !important; }
-    .title-text { font-size: 2.2rem; font-weight: 700; color: #00FF66; margin-bottom: 0px; }
-    .sub-text { color: #8B949E; font-size: 0.9rem; margin-bottom: 10px; }
+    .title-text { font-size: 2.5rem; font-weight: 700; color: #00FF66; margin-bottom: 0px; }
+    .sub-text { color: #8B949E; font-size: 0.9rem; margin-bottom: 15px; }
     .pdf-info { color: #58A6FF; font-size: 0.85rem; margin-bottom: 15px; }
-    .stButton>button { background-color: #238636 !important; color: #ffffff !important; border: 1px solid #2EA043 !important; width: 100%; }
+    .stButton>button { background-color: #238636 !important; color: #ffffff !important; border: 1px solid #2EA043 !important; width: 100%; border-radius: 6px; font-weight: bold; }
+    .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: transparent; color: #8B949E; text-align: right; padding-right: 20px; font-size: 0.75rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -146,8 +147,12 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
-# --- SIDEBAR: KATEGORIE- AUSWAHL ---
-st.sidebar.markdown("### [1] Wahl / Kategorie")
+# --- HEADER & TITEL ---
+st.markdown('<div class="title-text">> VoteCore</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen</div>', unsafe_allow_html=True)
+
+# --- WAHLORDNER / KATEGORIE AUSWAHL OBEN ---
+DATA_DIR = "data"
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
 selected_files = []
@@ -156,7 +161,7 @@ precomputed_analyses = {}
 
 if categories:
     category_map = {c.replace("_", " ").title(): c for c in categories}
-    selected_label = st.sidebar.selectbox("Kategorie wählen:", list(category_map.keys()))
+    selected_label = st.selectbox("Wahl / Kategorie auswählen:", list(category_map.keys()))
     selected_category = category_map[selected_label]
     selected_category_path = os.path.join(DATA_DIR, selected_category)
     
@@ -168,13 +173,9 @@ if categories:
     
     precomputed_analyses = load_precomputed_analyses(selected_category_path)
 
-# --- HEADER ---
-st.markdown('<div class="title-text">> PDV V1.1</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen</div>', unsafe_allow_html=True)
-
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
-    st.markdown(f'<div class="pdf-info">Geladenes Parteien-Set: {info_str}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="pdf-info">Aktives Parteien-Set: {info_str}</div>', unsafe_allow_html=True)
     active_g_files = get_cached_gemini_files(selected_files)
 else:
     st.warning("Keine PDFs in dieser Kategorie gefunden.")
@@ -184,16 +185,18 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# HOT TOPICS
+# --- HOT TOPICS ALS KACHEL-LOOK (GRID) ---
 if selected_files:
     st.markdown("### 🔥 Hot Topics")
     file_keys_tuple = tuple([(p[0], p[1], p[2]) for p in selected_files])
     auto_topics = get_hot_topics(file_keys_tuple, selected_category_path, api_key)
     
-    cols = st.columns(min(len(auto_topics), 5))
+    # 5 Spalten für den vollen Kachel-Look über die Fensterbreite
+    cols = st.columns(len(auto_topics) if len(auto_topics) > 0 else 5)
     for idx, top_name in enumerate(auto_topics):
-        if cols[idx % len(cols)].button(f"📌 {top_name}", key=f"ht_btn_{idx}DATA"):
-            st.session_state.selected_topic = top_name
+        with cols[idx]:
+            if st.button(f"📌 {top_name}", key=f"ht_btn_{idx}DATA"):
+                st.session_state.selected_topic = top_name
 
 st.markdown("---")
 
@@ -201,7 +204,7 @@ st.markdown("---")
 st.markdown("### 📖 Thema analysieren")
 topic = st.text_input("Thema eingeben oder oben ein Hot Topic anklicken:", value=st.session_state.selected_topic)
 
-if st.button("ANALYSEN_STARTEN [ENTER]"):
+if st.button("Starte die Analyse"):
     if not selected_files or not topic:
         st.warning("Bitte wähle ein Thema aus.")
     else:
@@ -209,7 +212,6 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
         
         is_hot_topic = (topic in auto_topics)
         
-        # Render-Hilfsfunktion für die neue Struktur
         def render_analysis_text(full_text):
             parts = full_text.split("## ")
             for part in parts:
@@ -222,7 +224,6 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                 lines = part.split("\n")
                 party_title = lines[0].strip()
                 
-                # Wir parsen die Bereiche für Maßnahmen sowie Chancen/Risiken
                 massnahme_summary = "Keine Kurzzusammenfassung verfügbar."
                 massnahme_details = []
                 chance_summary = "Keine Kurzzusammenfassung verfügbar."
@@ -252,20 +253,16 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                     elif current_section == "risiken" and line.strip():
                         risiko_details.append(line)
                 
-                # UI-Ausgabe Ebene 1: Partei
                 st.markdown(f"### {party_title}")
                 
-                # Stichpunkt Maßnahmen + Aufklapper
                 st.markdown(f"- **Detaillierte Maßnahmen:** {massnahme_summary}")
                 with st.expander("➕ Mehr Details & Quellen zu Maßnahmen"):
                     st.markdown("\n".join(massnahme_details))
                 
-                # Stichpunkt Chancen + Aufklapper
                 st.markdown(f"- **Chancen:** {chance_summary}")
                 with st.expander("➕ Mehr Details & Quellen zu Chancen"):
                     st.markdown("\n".join(chance_details))
                 
-                # Stichpunkt Risiken + Aufklapper
                 st.markdown(f"- **Risiken & Lücken:** {risiko_summary}")
                 with st.expander("➕ Mehr Details & Quellen zu Risiken & Lücken"):
                     st.markdown("\n".join(risiko_details))
@@ -275,7 +272,6 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
         if is_hot_topic and topic in precomputed_analyses:
             render_analysis_text(precomputed_analyses[topic])
         else:
-            # Neuer strukturierter Prompt für die präzisen Stichpunkte + Detail-Blöcke
             prompt = f"""
             Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
             
@@ -302,7 +298,7 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
 
             ---
             ## 📊 FAZIT & VERGLEICHSTABELLE
-            Erstelle eine übersichtliche Zusammenfassungstabelle zum direkten Vergleich aller gewählten Parteien:
+            Erstelle eine übersichtliche Zusammenfassungstabelle zum direktem Vergleich aller gewählten Parteien:
             Partei | Kernforderung / Hauptmaßnahme | Erwartete Wirkung | Haupthürde / Risiko
             """
 
@@ -330,3 +326,6 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                     save_analysis_to_json(selected_category_path, topic, response_text)
             else:
                 st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
+
+# --- FUßNOTE MIT VERSION ---
+st.markdown('<div class="footer">VoteCore V1.1</div>', unsafe_allow_html=True)
