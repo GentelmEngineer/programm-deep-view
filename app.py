@@ -59,7 +59,6 @@ def get_cached_gemini_files(file_tuples):
         gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
     return gemini_files
 
-# --- LÄDT HOT TOPICS & FERTIGE ANALYSEN ---
 def load_precomputed_data(category_path):
     topics = ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
     analyses = {}
@@ -82,7 +81,6 @@ def load_precomputed_data(category_path):
             
     return topics, analyses
 
-# Speichert neue Analysen direkt in die JSON-Datei im Ordner
 def save_analysis_to_json(category_path, topic, analysis_text):
     an_path = os.path.join(category_path, "hot_topic_analyses.json")
     analyses = {}
@@ -100,7 +98,6 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
-# --- SIDEBAR: KATEGORIE- AUSWAHL ---
 st.sidebar.markdown("### [1] Wahl / Kategorie")
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
@@ -123,7 +120,6 @@ if categories:
         pages = get_pdf_page_count(pdf_path)
         selected_files.append((party_name, pdf_path, pages))
 
-# --- HEADER ---
 st.markdown('<div class="title-text">> PDV V1.1 (Smart Cache)</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-text">Intelligente Parteiprogramm-Analyse mit Selbst-Caching</div>', unsafe_allow_html=True)
 
@@ -139,7 +135,6 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# HOT TOPICS CHIPS
 if selected_files and auto_topics:
     st.markdown("### 🔥 Hot Topics (Instant wenn gecached)")
     cols = st.columns(min(len(auto_topics), 7))
@@ -149,7 +144,6 @@ if selected_files and auto_topics:
 
 st.markdown("---")
 
-# THEMEN-EINGABE & ANALYSE
 st.markdown("### [3] Thema analysieren")
 topic = st.text_input("Thema eingeben oder oben ein Hot Topic anklicken:", value=st.session_state.selected_topic)
 
@@ -159,12 +153,10 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
     else:
         st.markdown("---")
         
-        # 1. PRÜFEN OB BEREITS GESPEICHERT (CACHE)
         if topic in precomputed_analyses:
-            st.info(⚡ Lade fertige Analyse aus dem System-Cache...")
+            st.info("⚡ Lade fertige Analyse aus dem System-Cache...")
             st.markdown(precomputed_analyses[topic])
         else:
-            # 2. LIVE-API CALL (BEim ersten Mal)
             prompt = f"""
             Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
             
@@ -211,7 +203,6 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
 
             if response_text:
                 st.markdown(response_text)
-                # Direkt in die JSON-Datei schreiben, damit es ab sofort fix da ist!
                 save_analysis_to_json(selected_category_path, topic, response_text)
             else:
                 st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
