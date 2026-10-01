@@ -6,7 +6,7 @@ from google import genai
 import pypdf
 
 # Layout & Styling
-st.set_page_config(page_title="PDV V1.1 (Smart Cache)", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="PDV V1.1", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -27,10 +27,9 @@ client = genai.Client(api_key=api_key)
 DATA_DIR = "data"
 
 MODELS_TO_TRY = [
-    "gemini-3.5-flash-light",
-    "gemini-3.6-flash",
+    "gemini-3.8-flash",
     "gemini-3.7-flash",
-    "gemini-3.8-flash"
+    "gemini-3.5-flash-lite"
 ]
 
 def get_pdf_page_count(filepath):
@@ -61,18 +60,31 @@ def get_cached_gemini_files(file_tuples):
         gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
     return gemini_files
 
-def load_precomputed_data(category_path):
-    topics = ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
-    analyses = {}
+# --- HOT TOPICS AUF 10 ERWEITERT ---
+@st.cache_data(show_spinner="Ermittle Hot Topics...")
+def get_hot_topics(file_tuples, _api_key):
+    temp_client = genai.Client(api_key=_api_key)
+    g_files = [st.session_state.uploaded_gemini_files[path] for _, path, _ in file_tuples if path in st.session_state.uploaded_gemini_files]
+    if not g_files:
+        return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten", "Wirtschaft", "Gesundheit", "Bildung", "Äußeres", "Migration"]
     
-    ht_path = os.path.join(category_path, "hot_topics.json")
-    if os.path.exists(ht_path):
+    prompt = "Nenne exakt 10 prägnante Hauptthemen/Schlagwörter dieser Parteiprogramme. Gib NUR eine kommaseparierte Liste zurück."
+    
+    for model_name in MODELS_TO_TRY:
         try:
-            with open(ht_path, "r", encoding="utf-8") as f:
-                topics = json.load(f)
+            res = temp_client.models.generate_content(
+                model=model_name,
+                contents=[*g_files, prompt]
+            )
+            if res and res.text:
+                return [t.strip() for t in res.text.split(",") if t.strip()][:10]
         except Exception:
-            pass
-            
+            continue
+
+    return ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten", "Wirtschaft", "Gesundheit", "Bildung", "Äußeres", "Migration"]
+
+def load_precomputed_analyses(category_path):
+    analyses = {}
     an_path = os.path.join(category_path, "hot_topic_analyses.json")
     if os.path.exists(an_path):
         try:
@@ -80,8 +92,7 @@ def load_precomputed_data(category_path):
                 analyses = json.load(f)
         except Exception:
             pass
-            
-    return topics, analyses
+    return analyses
 
 def save_analysis_to_json(category_path, topic, analysis_text):
     an_path = os.path.join(category_path, "hot_topic_analyses.json")
@@ -100,13 +111,13 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
+# --- SIDEBAR: KATEGORIE- AUSWAHL ---
 st.sidebar.markdown("### [1] Wahl / Kategorie")
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
 selected_files = []
-auto_topics = []
-precomputed_analyses = {}
 selected_category_path = ""
+precomputed_analyses = {}
 
 if categories:
     category_map = {c.replace("_", " ").title(): c for c in categories}
@@ -114,16 +125,17 @@ if categories:
     selected_category = category_map[selected_label]
     selected_category_path = os.path.join(DATA_DIR, selected_category)
     
-    auto_topics, precomputed_analyses = load_precomputed_data(selected_category_path)
-    
     all_pdf_paths = glob.glob(os.path.join(selected_category_path, "*.pdf"))
     for pdf_path in sorted(all_pdf_paths):
         party_name = os.path.basename(pdf_path).replace(".pdf", "")
         pages = get_pdf_page_count(pdf_path)
         selected_files.append((party_name, pdf_path, pages))
+    
+    precomputed_analyses = load_precomputed_analyses(selected_category_path)
 
-st.markdown('<div class="title-text">> PDV V1.1 (Smart Cache)</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Intelligente Parteiprogramm-Analyse mit Selbst-Caching</div>', unsafe_allow_html=True)
+# --- HEADER ---
+st.markdown('<div class="title-text">> PDV V1.1</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-text">Deep-Analysis von Parteiprogrammen</div>', unsafe_allow_html=True)
 
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
@@ -137,16 +149,21 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-if selected_files and auto_topics:
-    st.markdown("### 🔥 Hot Topics (Instant wenn gecached)")
-    cols = st.columns(min(len(auto_topics), 7))
+# HOT TOPICS (10 Stück)
+if selected_files:
+    st.markdown("### 🔥 Hot Topics")
+    file_keys_tuple = tuple([(p[0], p/1 if False else p[1], p[2]) for p in selected_files])
+    auto_topics = get_hot_topics(file_keys_tuple, api_key)
+    
+    cols = st.columns(min(len(auto_topics), 5))
     for idx, top_name in enumerate(auto_topics):
-        if cols[idx % len(cols)].button(f"📌 {top_name}", key=f"ht_btn_{idx}"):
+        if cols[idx % len(cols)].button(f"📌 {top_name}", key=f"ht_btn_{idx}DATA"):
             st.session_state.selected_topic = top_name
 
 st.markdown("---")
 
-st.markdown("### [3] Thema analysieren")
+# THEMEN-EINGABE & ANALYSE (Mit Buch-Emoji)
+st.markdown("### 📖 Thema analysieren")
 topic = st.text_input("Thema eingeben oder oben ein Hot Topic anklicken:", value=st.session_state.selected_topic)
 
 if st.button("ANALYSEN_STARTEN [ENTER]"):
@@ -155,30 +172,37 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
     else:
         st.markdown("---")
         
-        if topic in precomputed_analyses:
-            st.info("⚡ Lade fertige Analyse aus dem System-Cache...")
+        # Prüfen ob im Cache vorhanden
+        is_hot_topic = (topic in auto_topics)
+        
+        if is_hot_topic and topic in precomputed_analyses:
             st.markdown(precomputed_analyses[topic])
         else:
+            # Prompt mit klarer Trennung zwischen Hauptaussage und aufklappbaren Details
             prompt = f"""
             Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
             
             REGELN:
             1. Nutze AUSSCHLIESSLICH Informationen aus den hochgeladenen Parteiprogrammen.
-            2. Gehe ins Detail und erläutere die jeweiligen Maßnahmen und Positionen umfassend.
+            2. Erstelle für jede Partei als ersten Satz eine prägnante **KERNKESSAUGE (Main Statement)**, die die Grundhaltung auf den Punkt bringt.
             3. Führe Belege und Quellenangaben an, sofern im Text auffindbar [Quelle: Dateiname.pdf, S. X].
             4. Falls eine Partei zu dem Thema keine Aussagen trifft, gib dies explizit an.
 
-            Antworte im Markdown-Format wie folgt:
+            Antworte strikt im folgenden Markdown-Format, damit es in programmatische Blöcke gegliedert werden kann:
 
             ## [PARTEI NAME]
-            ### 1. GEPLANTE MASSNAHMEN & POSITIONEN
-            - Ausführliche Beschreibung der konkreten Ziele, Forderungen und Vorhaben.
+            **KERN_AUSSAGE:** [Hier ein prägnanter Satz zur Kernposition der Partei]
 
-            ### 2. CHANCEN & POTENZIALE
-            - Detaillierte Analyse der positiven Effekte und Chancen dieser Maßnahmen.
+            **DETAILS_START**
+            ### Geplante Maßnahmen & Positionen
+            - Ausführliche Beschreibung der konkreten Ziele und Vorhaben.
 
-            ### 3. RISIKEN, LÜCKEN & KRITIKPUNKTE
-            - Fundierte Analyse möglicher Risiken, unklarer Finanzierungen oder fehlender Aspekte.
+            ### Chancen & Potenziale
+            - Detaillierte Analyse der positiven Effekte.
+
+            ### Risiken, Lücken & Kritikpunkte
+            - Fundierte Analyse möglicher Risiken oder fehlender Aspekte.
+            **DETAILS_END**
 
             ---
             ## 📊 FAZIT & VERGLEICHSTABELLE
@@ -189,7 +213,7 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
             response_text = None
             last_error = None
 
-            with st.spinner(f"Führe Erstanalyse für '{topic}' aus und speichere ab..."):
+            with st.spinner(f"Führe Analyse für '{topic}' aus..."):
                 for model_name in MODELS_TO_TRY:
                     try:
                         res = client.models.generate_content(
@@ -204,7 +228,48 @@ if st.button("ANALYSEN_STARTEN [ENTER]"):
                         continue
 
             if response_text:
-                st.markdown(response_text)
-                save_analysis_to_json(selected_category_path, topic, response_text)
+                # Intelligentes Parsen: Hauptaussage anzeigen, Details in ein st.expander (+) packen
+                parts = response_text.split("## ")
+                
+                for part in parts:
+                    if not part.strip():
+                        continue
+                    if part.startswith("📊"):
+                        st.markdown("## 📊 " + part.replace("📊", ""))
+                        continue
+                        
+                    lines = part.split("\n")
+                    party_title = lines[0].strip()
+                    
+                    main_statement = "Keine Kernkernaussage verfügbar."
+                    detail_content = []
+                    
+                    capturing = False
+                    for line in lines[1:]:
+                        if "KERN_AUSSAGE:" in line:
+                            main_statement = line.replace("**KERN_AUSSAGE:**", "").strip()
+                        elif "**DETAILS_START**" in line:
+                            capturing = True
+                            continue
+                        elif "**DETAILS_END**" in line:
+                            capturing = False
+                            continue
+                        
+                        if capturing:
+                            detail_content.append(line)
+                    
+                    # UI-Rendering mit Accordion (+)
+                    st.markdown(f"### {party_title}")
+                    st.markdown(f"**Kernposition:** {main_statement}")
+                    
+                    with st.expander("➕ Detaillierte Maßnahmen, Chancen & Risiken anzeigen"):
+                        st.markdown("\n".join(detail_content))
+                    
+                    st.markdown("---")
+
+                # Caching NUR für Hot Topics abspeichern
+                if is_hot_topic:
+                    save_analysis_to_json(selected_category_path, topic, response_text)
+                    
             else:
                 st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
