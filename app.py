@@ -1,6 +1,7 @@
 import os
 import json
 import glob
+import re
 import streamlit as st
 from google import genai
 from google.genai.types import HttpOptions
@@ -53,6 +54,16 @@ st.markdown("""
         margin-bottom: 15px; 
     }
     
+    .agent-status {
+        background-color: #21262d;
+        border-left: 3px solid #58a6ff;
+        padding: 8px 12px;
+        margin-bottom: 10px;
+        font-size: 0.8rem;
+        color: #8b949e;
+        border-radius: 0 6px 6px 0;
+    }
+    
     .stButton>button { 
         background-color: #161b22 !important; 
         color: #ffffff !important; 
@@ -66,7 +77,6 @@ st.markdown("""
         border-color: #8b949e !important;
     }
     
-    /* Styling für ausgegraute und kleinere Quellenangaben */
     .source-citation {
         color: #8B949E !important;
         font-size: 0.8rem !important;
@@ -82,16 +92,14 @@ if not api_key:
     st.error("FEHLER: GEMINI_API_KEY fehlt!")
     st.stop()
 
-# Client mit 90 Sekunden Timeout
+# Client mit 90 Sekunden Timeout für Sicherheit
 client = genai.Client(
     api_key=api_key, 
     http_options=HttpOptions(timeout=90 * 1000)
 )
 DATA_DIR = "data"
 
-# Modell auf Gemini 3.5 Flash-Lite fixiert
-PRIMARY_MODEL = "gemini-3.5-flash-lite"
-FALLBACK_MODEL = "gemini-3.5-flash-lite"
+MODEL_NAME = "gemini-3.5-flash-lite"
 
 def get_pdf_page_count(filepath):
     try:
@@ -173,26 +181,20 @@ def get_hot_topics(file_tuples, category_path, active_g_files, _api_key):
     
     prompt = "Nenne exakt 5 prägnante Hauptthemen/Schlagwörter dieser Parteiprogramme. Gib NUR eine kommaseparierte Liste zurück."
     
-    generated_topics = None
-    for model_name in [PRIMARY_MODEL, FALLBACK_MODEL]:
-        try:
-            res = client.models.generate_content(
-                model=model_name,
-                contents=[*active_g_files, prompt]
-            )
-            if res and res.text:
-                parsed = [t.strip() for t in res.text.split(",") if t.strip()][:5]
-                if len(parsed) >= 3:
-                    generated_topics = parsed
-                    break
-        except Exception:
-            continue
+    try:
+        res = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[*active_g_files, prompt]
+        )
+        if res and res.text:
+            parsed = [t.strip() for t in res.text.split(",") if t.strip()][:5]
+            if len(parsed) >= 3:
+                save_hot_topics_to_json(category_path, parsed)
+                return parsed
+    except Exception:
+        pass
 
-    if not generated_topics:
-        generated_topics = fallback_topics
-
-    save_hot_topics_to_json(category_path, generated_topics)
-    return generated_topics
+    return fallback_topics
 
 def load_precomputed_analyses(category_path):
     analyses = {}
@@ -222,24 +224,19 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
-# Hilfsfunktion, um Quellenangaben in eckigen Klammern HTML-technisch zu formatieren
 def format_sources_in_text(text):
-    import re
-    # Sucht nach Mustern wie [Quelle: ...] oder [Dateiname.pdf, S. X]
-    # und packt sie in den CSS-Span für kleinere/graue Schrift
     pattern = r'(\[.*?S\.\s*\d+.*?\]|\[Quelle:.*?\])'
-    formatted = re.sub(pattern, r'<span class="source-citation">\1</span>', text)
-    return formatted
+    return re.sub(pattern, r'<span class="source-citation">\1</span>', text)
 
 # --- HEADER & TITEL ---
 st.markdown("""
 <div class="title-box">
     <div class="title-text">VoteCore</div>
-    <div class="sub-text">Deep-Analysis von Parteiprogrammen</div>
+    <div class="sub-text">Deep-Analysis von Parteiprogrammen (Multi-Agent Pipeline)</div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- WAHLORDNER / KATEGORIE AUSWAHL OBEN ---
+# --- WAHLORDNER / KATEGORIE AUSWAHL ---
 DATA_DIR = "data"
 categories = [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))] if os.path.exists(DATA_DIR) else []
 
@@ -292,12 +289,11 @@ st.markdown("---")
 st.markdown("### 📖 Thema analysieren")
 topic = st.text_input("Thema eingeben oder oben ein Hot Topic anklicken:", value=st.session_state.selected_topic)
 
-if st.button("Starte die Analyse"):
+if st.button("Starte Multi-Agenten-Analyse"):
     if not selected_files or not topic:
         st.warning("Bitte wähle ein Thema aus.")
     else:
         st.markdown("---")
-        
         is_hot_topic = (topic in auto_topics)
         
         def render_analysis_text(full_text):
@@ -340,82 +336,114 @@ if st.button("Starte die Analyse"):
                 
                 st.markdown(f"### {party_title}")
                 
-                # Formatierung für Summaries
-                formatted_massnahme_sum = format_sources_in_text(massnahme_summary)
-                formatted_chance_sum = format_sources_in_text(chance_summary)
-                formatted_risiko_sum = format_sources_in_text(risiko_summary)
-                
-                st.markdown(f"- **Detaillierte Maßnahmen:** {formatted_massnahme_sum}", unsafe_allow_html=True)
+                st.markdown(f"- **Detaillierte Maßnahmen:** {format_sources_in_text(massnahme_summary)}", unsafe_allow_html=True)
                 with st.expander("➕ Mehr Details & Quellen zu Maßnahmen"):
-                    formatted_details_m = [format_sources_in_text(d) for d in massnahme_details]
-                    st.markdown("\n".join(formatted_details_m), unsafe_allow_html=True)
+                    st.markdown("\n".join([format_sources_in_text(d) for d in massnahme_details]), unsafe_allow_html=True)
                 
-                st.markdown(f"- **Chancen:** {formatted_chance_sum}", unsafe_allow_html=True)
+                st.markdown(f"- **Chancen:** {format_sources_in_text(chance_summary)}", unsafe_allow_html=True)
                 with st.expander("➕ Mehr Details & Quellen zu Chancen"):
-                    formatted_details_c = [format_sources_in_text(d) for d in chance_details]
-                    st.markdown("\n".join(formatted_details_c), unsafe_allow_html=True)
+                    st.markdown("\n".join([format_sources_in_text(d) for d in chance_details]), unsafe_allow_html=True)
                 
-                st.markdown(f"- **Risiken & Lücken:** {formatted_risiko_sum}", unsafe_allow_html=True)
+                st.markdown(f"- **Risiken & Lücken:** {format_sources_in_text(risiko_summary)}", unsafe_allow_html=True)
                 with st.expander("➕ Mehr Details & Quellen zu Risiken & Lücken"):
-                    formatted_details_r = [format_sources_in_text(d) for d in risiko_details]
-                    st.markdown("\n".join(formatted_details_r), unsafe_allow_html=True)
+                    st.markdown("\n".join([format_sources_in_text(d) for d in risiko_details]), unsafe_allow_html=True)
                 
                 st.markdown("---")
 
         if is_hot_topic and topic in precomputed_analyses:
             render_analysis_text(precomputed_analyses[topic])
         else:
-            prompt = f"""
-            Analysiere neutral die Vorhaben der Parteien zum Thema: {topic}
-            Nutze ausschliesslich die hochgeladenen Parteiprogramme.
-            Beschränke dich pro Kategorie auf exakt die 3 wesentlichen Punkte inkl. Quellenangabe [Quelle: Dateiname.pdf, S. X].
+            status_box = st.empty()
+            
+            try:
+                # --- AGENT 1: Der Analyst (Extrahiert harte Maßnahmen aus PDFs) ---
+                status_box.markdown('<div class="agent-status">🤖 Agent 1 (Analyst) extrahiert die konkreten Maßnahmen aus den Programmen...</div>', unsafe_allow_html=True)
+                
+                prompt_agent1 = f"""
+                Analysiere neutral die konkreten Vorhaben und Maßnahmen der Parteien zum Thema: {topic}
+                Nutze ausschliesslich die hochgeladenen Parteiprogramme.
+                Extrahiere pro Partei exakt die 3 wesentlichen Maßnahmen inkl. Quellenangabe [Quelle: Dateiname.pdf, S. X].
 
-            Antworte strikt im folgenden Format:
+                Antworte strikt im Format:
+                ## [PARTEI NAME]
+                **MASSNAHMEN_SUMMARY:** [Kurzer Satz zur Hauptmaßnahme]
+                - **Detaillierte Vorhaben & Belege:**
+                  - 1. ... [Quelle: ...]
+                  - 2. ... [Quelle: ...]
+                  - 3. ... [Quelle: ...]
+                """
+                
+                res1 = client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=[*active_g_files, prompt_agent1]
+                )
+                agent1_output = res1.text if res1 and res1.text else ""
 
-            ## [PARTEI NAME]
-            **MASSNAHMEN_SUMMARY:** [Kurzer Satz zur Hauptmaßnahme]
-            - **Detaillierte Vorhaben & Belege:**
-              - 1. ... [Quelle: ...]
-              - 2. ... [Quelle: ...]
-              - 3. ... [Quelle: ...]
+                # --- AGENT 2: Der Chancen-Ableiter (Nimmt Agent 1 Text, liest keine PDFs neu!) ---
+                status_box.markdown('<div class="agent-status">🤖 Agent 2 (Chancen-Analyst) leitet Potenziale aus den Maßnahmen ab...</div>', unsafe_allow_html=True)
+                
+                prompt_agent2 = f"""
+                Hier sind die extrahierten Maßnahmen der Parteien zum Thema '{topic}':
+                {agent1_output}
 
-            **CHANCEN_SUMMARY:** [Kurzer Satz zur Hauptchance]
-            - **Detaillierte Potenziale & Belege:**
-              - 1. ... [Quelle: ...]
-              - 2. ... [Quelle: ...]
-              - 3. ... [Quelle: ...]
+                Deine Aufgabe als Chancen-Analyst: Leite basierend NUR auf diesen Maßnahmen für jede Partei exakt die 3 wesentlichen Chancen/Potenziale ab.
+                Behalte die exakte Parteistruktur bei und füge folgendes Format hinzu:
+                **CHANCEN_SUMMARY:** [Kurzer Satz zur Hauptchance]
+                - **Detaillierte Potenziale & Belege:**
+                  - 1. ...
+                  - 2. ...
+                  - 3. ...
+                """
+                
+                res2 = client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=[prompt_agent2]
+                )
+                agent2_output = res2.text if res2 and res2.text else ""
 
-            **RISIKEN_SUMMARY:** [Kurzer Satz zum Hauptrisiko]
-            - **Detaillierte Risiken & Lücken:**
-              - 1. ... [Quelle: ...]
-              - 2. ... [Quelle: ...]
-              - 3. ... [Quelle: ...]
-            """
+                # --- AGENT 3: Der Kritiker & Risiko-Prüfer (Kombiniert & prüft kritisch) ---
+                status_box.markdown('<div class="agent-status">🤖 Agent 3 (Kritiker & Risiko-Prüfer) hinterfragt die Umsetzbarkeit und deckt Lücken auf...</div>', unsafe_allow_html=True)
+                
+                prompt_agent3 = f"""
+                Hier ist die bisherige Analyse zum Thema '{topic}':
+                {agent2_output}
 
-            response_text = None
-            last_error = None
+                Deine Aufgabe als kritischer Prüfer: Hinterfrage die Vorhaben und Maßnahmen kritisch. Beleuchte Umsetzungsrisiken, Finanzierungshürden oder logische Lücken. 
+                Füge für jede Partei im gleichen Format die Risiken hinzu:
+                **RISIKEN_SUMMARY:** [Kurzer Satz zum Hauptrisiko]
+                - **Detaillierte Risiken & Lücken:**
+                  - 1. ...
+                  - 2. ...
+                  - 3. ...
 
-            with st.spinner(f"Führe Analyse für '{topic}' aus..."):
-                for model_name in [PRIMARY_MODEL, FALLBACK_MODEL]:
-                    try:
-                        res = client.models.generate_content(
-                            model=model_name,
-                            contents=[*active_g_files, prompt]
-                        )
-                        if res and res.text:
-                            response_text = res.text
-                            break
-                    except Exception as e:
-                        last_error = e
-                        continue
+                Gib den finalen, vollständigen Text für alle Parteien in exakt diesem Schema aus (ohne zusätzlichen Einleitungstext):
+                ## [PARTEI NAME]
+                **MASSNAHMEN_SUMMARY:** ...
+                - **Detaillierte Vorhaben & Belege:** ...
+                **CHANCEN_SUMMARY:** ...
+                - **Detaillierte Potenziale & Belege:** ...
+                **RISIKEN_SUMMARY:** ...
+                - **Detaillierte Risiken & Lücken:** ...
+                """
+                
+                res3 = client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=[prompt_agent3]
+                )
+                final_response = res3.text if res3 and res3.text else ""
+                
+                status_box.empty()
 
-            if response_text:
-                render_analysis_text(response_text)
+                if final_response:
+                    render_analysis_text(final_response)
+                    if is_hot_topic:
+                        save_analysis_to_json(selected_category_path, topic, final_response)
+                else:
+                    st.error("Fehler: Die Agenten-Pipeline lieferte keinen Text.")
 
-                if is_hot_topic:
-                    save_analysis_to_json(selected_category_path, topic, response_text)
-            else:
-                st.error(f"Fehler bei der Analyse (Timeout oder Limit erreicht): {last_error}")
+            except Exception as e:
+                status_box.empty()
+                st.error(f"Fehler bei der Multi-Agenten-Analyse: {e}")
 
 # --- FUßNOTE MIT VERSION ---
-st.markdown('<div class="footer">VoteCore V1.3</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">VoteCore V1.4 (Multi-Agent)</div>', unsafe_allow_html=True)
