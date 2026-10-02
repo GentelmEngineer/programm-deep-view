@@ -75,15 +75,16 @@ if not api_key:
     st.error("FEHLER: GEMINI_API_KEY fehlt!")
     st.stop()
 
-# Client mit 90 Sekunden Timeout für große PDFs
+# Client mit 90 Sekunden Timeout
 client = genai.Client(
     api_key=api_key, 
     http_options=HttpOptions(timeout=90 * 1000)
 )
 DATA_DIR = "data"
 
-PRIMARY_MODEL = "gemini-3.8-flash"
-FALLBACK_MODEL = "gemini-3.7-flash"
+# Umstellung auf Gemini 3.5 Flash-Lite
+PRIMARY_MODEL = "gemini-3.5-flash-lite"
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 def get_pdf_page_count(filepath):
     try:
@@ -393,4 +394,4 @@ if st.button("Starte die Analyse"):
                 st.error(f"Fehler bei der Analyse (Timeout oder Limit erreicht): {last_error}")
 
 # --- FUßNOTE MIT VERSION ---
-st.markdown('<div class="footer">VoteCore V1.1</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">VoteCore V1.2</div>', unsafe_allow_html=True)
