@@ -12,7 +12,6 @@ st.markdown("""
 <style>
     html, body, [class*="css"] { font-family: 'Courier New', Courier, monospace !important; }
     
-    /* Titel-Box mit weißgrauem Hintergrund & Ecken-Streifen */
     .title-box {
         position: relative;
         padding: 20px 25px;
@@ -43,7 +42,6 @@ st.markdown("""
     .title-text { font-size: 2.5rem; font-weight: 700; color: #ffffff; margin-bottom: 0px; letter-spacing: 1px; }
     .sub-text { color: #8B949E; font-size: 0.9rem; margin-top: 5px; margin-bottom: 0px; }
     
-    /* PDF-Info Box mit Weißgrau-Hintergrund */
     .pdf-info { 
         background-color: #161b22; 
         border: 1px solid rgba(255, 255, 255, 0.15); 
@@ -54,7 +52,6 @@ st.markdown("""
         margin-bottom: 15px; 
     }
     
-    /* Buttons in edlem Weiß / Dunkel-Look */
     .stButton>button { 
         background-color: #161b22 !important; 
         color: #ffffff !important; 
@@ -94,25 +91,52 @@ def get_pdf_page_count(filepath):
     except Exception:
         return "?"
 
-if "uploaded_gemini_files" not in st.session_state:
-    st.session_state.uploaded_gemini_files = {}
-
-def get_cached_gemini_files(file_tuples):
-    current_paths = {pdf_path for _, pdf_path, _ in file_tuples}
-    for cached_path in list(st.session_state.uploaded_gemini_files.keys()):
-        if cached_path not in current_paths:
-            try:
-                client.files.delete(name=st.session_state.uploaded_gemini_files[cached_path].name)
-            except Exception:
-                pass
-            del st.session_state.uploaded_gemini_files[cached_path]
+# --- PERSISTENTES CLOUD-DATEI-CACHING (Verhindert erneutes Hochladen) ---
+def get_cached_gemini_files(file_tuples, category_path):
+    cache_path = os.path.join(category_path, "gemini_files_cache.json")
+    cloud_file_map = {}
+    
+    # Versuche bestehenden Cloud-Cache zu laden
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cloud_file_map = json.load(f)
+        except Exception:
+            pass
 
     gemini_files = []
+    updated = False
+
     for party_name, pdf_path, _ in file_tuples:
-        if pdf_path not in st.session_state.uploaded_gemini_files:
-            g_file = client.files.upload(file=pdf_path)
-            st.session_state.uploaded_gemini_files[pdf_path] = g_file
-        gemini_files.append(st.session_state.uploaded_gemini_files[pdf_path])
+        file_basename = os.path.basename(pdf_path)
+        g_file = None
+        
+        # Prüfen, ob die Datei bereits in der Cloud registriert ist und existiert
+        if file_basename in cloud_file_map:
+            remote_name = cloud_file_map[file_basename]
+            try:
+                # Testen, ob das File noch in der Gemini Cloud existiert
+                g_file = client.files.get(name=remote_name)
+            except Exception:
+                g_file = None # Wurde in der Cloud gelöscht / abgelaufen
+
+        # Wenn nicht vorhanden, einmalig hochladen
+        if not g_file:
+            with st.spinner(f"Lade '{party_name}' einmalig in die Gemini-Cloud hoch..."):
+                g_file = client.files.upload(file=pdf_path)
+                cloud_file_map[file_basename] = g_file.name
+                updated = True
+
+        gemini_files.append(g_file)
+
+    # Cache aktualisieren, falls neue Dateien hochgeladen wurden
+    if updated:
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(cloud_file_map, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     return gemini_files
 
 def load_cached_hot_topics(category_path):
@@ -135,16 +159,14 @@ def save_hot_topics_to_json(category_path, topics):
     except Exception as e:
         print(f"Konnte Hot Topics nicht cachen: {e}")
 
-def get_hot_topics(file_tuples, category_path, _api_key):
+def get_hot_topics(file_tuples, category_path, active_g_files, _api_key):
     cached_topics = load_cached_hot_topics(category_path)
     if cached_topics:
         return cached_topics
 
     temp_client = genai.Client(api_key=_api_key)
-    g_files = [st.session_state.uploaded_gemini_files[path] for _, path, _ in file_tuples if path in st.session_state.uploaded_gemini_files]
-    
     fallback_topics = ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
-    if not g_files:
+    if not active_g_files:
         return fallback_topics
     
     prompt = "Nenne exakt 5 prägnante Hauptthemen/Schlagwörter dieser Parteiprogramme. Gib NUR eine kommaseparierte Liste zurück."
@@ -154,7 +176,7 @@ def get_hot_topics(file_tuples, category_path, _api_key):
         try:
             res = temp_client.models.generate_content(
                 model=model_name,
-                contents=[*g_files, prompt]
+                contents=[*active_g_files, prompt]
             )
             if res and res.text:
                 parsed = [t.strip() for t in res.text.split(",") if t.strip()][:5]
@@ -231,7 +253,8 @@ if categories:
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
     st.markdown(f'<div class="pdf-info">Aktives Parteien-Set: {info_str}</div>', unsafe_allow_html=True)
-    active_g_files = get_cached_gemini_files(selected_files)
+    # Nutzt jetzt den persistenten Cloud-Cache für die Dateien
+    active_g_files = get_cached_gemini_files(selected_files, selected_category_path)
 else:
     st.warning("Keine PDFs in dieser Kategorie gefunden.")
 
@@ -240,13 +263,12 @@ st.markdown("---")
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = ""
 
-# --- HOT TOPICS ALS FLIESSENDE KACHELN (Wird bei Fensterende umgebrochen) ---
+# HOT TOPICS
 if selected_files:
     st.markdown("### 🔥 Hot Topics")
     file_keys_tuple = tuple([(p[0], p[1], p[2]) for p in selected_files])
-    auto_topics = get_hot_topics(file_keys_tuple, selected_category_path, api_key)
+    auto_topics = get_hot_topics(file_keys_tuple, selected_category_path, active_g_files, api_key)
     
-    # Dynamisches Wrap-Layout über Spalten
     num_topics = len(auto_topics) if len(auto_topics) > 0 else 5
     cols = st.columns(num_topics)
     for idx, top_name in enumerate(auto_topics):
