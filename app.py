@@ -66,6 +66,13 @@ st.markdown("""
         border-color: #8b949e !important;
     }
     
+    /* Styling für ausgegraute und kleinere Quellenangaben */
+    .source-citation {
+        color: #8B949E !important;
+        font-size: 0.8rem !important;
+        font-style: italic;
+    }
+    
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: transparent; color: #8B949E; text-align: right; padding-right: 20px; font-size: 0.75rem; }
 </style>
 """, unsafe_allow_html=True)
@@ -82,7 +89,7 @@ client = genai.Client(
 )
 DATA_DIR = "data"
 
-# Umstellung auf Gemini 3.5 Flash-Lite
+# Modell auf Gemini 3.5 Flash-Lite fixiert
 PRIMARY_MODEL = "gemini-3.5-flash-lite"
 FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
@@ -215,6 +222,15 @@ def save_analysis_to_json(category_path, topic, analysis_text):
     except Exception as e:
         print(f"Konnte Analyse nicht lokal cachen: {e}")
 
+# Hilfsfunktion, um Quellenangaben in eckigen Klammern HTML-technisch zu formatieren
+def format_sources_in_text(text):
+    import re
+    # Sucht nach Mustern wie [Quelle: ...] oder [Dateiname.pdf, S. X]
+    # und packt sie in den CSS-Span für kleinere/graue Schrift
+    pattern = r'(\[.*?S\.\s*\d+.*?\]|\[Quelle:.*?\])'
+    formatted = re.sub(pattern, r'<span class="source-citation">\1</span>', text)
+    return formatted
+
 # --- HEADER & TITEL ---
 st.markdown("""
 <div class="title-box">
@@ -324,17 +340,25 @@ if st.button("Starte die Analyse"):
                 
                 st.markdown(f"### {party_title}")
                 
-                st.markdown(f"- **Detaillierte Maßnahmen:** {massnahme_summary}")
+                # Formatierung für Summaries
+                formatted_massnahme_sum = format_sources_in_text(massnahme_summary)
+                formatted_chance_sum = format_sources_in_text(chance_summary)
+                formatted_risiko_sum = format_sources_in_text(risiko_summary)
+                
+                st.markdown(f"- **Detaillierte Maßnahmen:** {formatted_massnahme_sum}", unsafe_allow_html=True)
                 with st.expander("➕ Mehr Details & Quellen zu Maßnahmen"):
-                    st.markdown("\n".join(massnahme_details))
+                    formatted_details_m = [format_sources_in_text(d) for d in massnahme_details]
+                    st.markdown("\n".join(formatted_details_m), unsafe_allow_html=True)
                 
-                st.markdown(f"- **Chancen:** {chance_summary}")
+                st.markdown(f"- **Chancen:** {formatted_chance_sum}", unsafe_allow_html=True)
                 with st.expander("➕ Mehr Details & Quellen zu Chancen"):
-                    st.markdown("\n".join(chance_details))
+                    formatted_details_c = [format_sources_in_text(d) for d in chance_details]
+                    st.markdown("\n".join(formatted_details_c), unsafe_allow_html=True)
                 
-                st.markdown(f"- **Risiken & Lücken:** {risiko_summary}")
+                st.markdown(f"- **Risiken & Lücken:** {formatted_risiko_sum}", unsafe_allow_html=True)
                 with st.expander("➕ Mehr Details & Quellen zu Risiken & Lücken"):
-                    st.markdown("\n".join(risiko_details))
+                    formatted_details_r = [format_sources_in_text(d) for d in risiko_details]
+                    st.markdown("\n".join(formatted_details_r), unsafe_allow_html=True)
                 
                 st.markdown("---")
 
@@ -394,4 +418,4 @@ if st.button("Starte die Analyse"):
                 st.error(f"Fehler bei der Analyse (Timeout oder Limit erreicht): {last_error}")
 
 # --- FUßNOTE MIT VERSION ---
-st.markdown('<div class="footer">VoteCore V1.2</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">VoteCore V1.3</div>', unsafe_allow_html=True)
