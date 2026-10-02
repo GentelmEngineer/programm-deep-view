@@ -92,13 +92,11 @@ if not api_key:
     st.error("FEHLER: GEMINI_API_KEY fehlt!")
     st.stop()
 
-# Client mit 90 Sekunden Timeout für Sicherheit
 client = genai.Client(
     api_key=api_key, 
     http_options=HttpOptions(timeout=90 * 1000)
 )
 DATA_DIR = "data"
-
 MODEL_NAME = "gemini-3.5-flash-lite"
 
 def get_pdf_page_count(filepath):
@@ -232,7 +230,7 @@ def format_sources_in_text(text):
 st.markdown("""
 <div class="title-box">
     <div class="title-text">VoteCore</div>
-    <div class="sub-text">Deep-Analysis von Parteiprogrammen (Multi-Agent Pipeline)</div>
+    <div class="sub-text">Deep-Analysis von Parteiprogrammen (2-Agent Pipeline)</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -289,7 +287,7 @@ st.markdown("---")
 st.markdown("### 📖 Thema analysieren")
 topic = st.text_input("Thema eingeben oder oben ein Hot Topic anklicken:", value=st.session_state.selected_topic)
 
-if st.button("Starte Multi-Agenten-Analyse"):
+if st.button("Starte 2-Agenten-Analyse"):
     if not selected_files or not topic:
         st.warning("Bitte wähle ein Thema aus.")
     else:
@@ -356,8 +354,8 @@ if st.button("Starte Multi-Agenten-Analyse"):
             status_box = st.empty()
             
             try:
-                # --- AGENT 1: Der Analyst (Extrahiert harte Maßnahmen aus PDFs) ---
-                status_box.markdown('<div class="agent-status">🤖 Agent 1 (Analyst) extrahiert die konkreten Maßnahmen aus den Programmen...</div>', unsafe_allow_html=True)
+                # --- AGENT 1: Maßnahmensucher (Liest PDFs) ---
+                status_box.markdown('<div class="agent-status">🤖 Agent 1 (Maßnahmen-Analyst) liest die Parteiprogramme und zieht die Kernvorhaben...</div>', unsafe_allow_html=True)
                 
                 prompt_agent1 = f"""
                 Analysiere neutral die konkreten Vorhaben und Maßnahmen der Parteien zum Thema: {topic}
@@ -379,17 +377,27 @@ if st.button("Starte Multi-Agenten-Analyse"):
                 )
                 agent1_output = res1.text if res1 and res1.text else ""
 
-                # --- AGENT 2: Der Chancen-Ableiter (Nimmt Agent 1 Text, liest keine PDFs neu!) ---
-                status_box.markdown('<div class="agent-status">🤖 Agent 2 (Chancen-Analyst) leitet Potenziale aus den Maßnahmen ab...</div>', unsafe_allow_html=True)
+                # --- AGENT 2: Chancen- & Risiko-Prüfer (Arbeitet nur mit dem Text von Agent 1) ---
+                status_box.markdown('<div class="agent-status">🤖 Agent 2 (Chancen- & Risiko-Prüfer) bewertet Potenziale, Umsetzbarkeit und Hürden...</div>', unsafe_allow_html=True)
                 
                 prompt_agent2 = f"""
                 Hier sind die extrahierten Maßnahmen der Parteien zum Thema '{topic}':
                 {agent1_output}
 
-                Deine Aufgabe als Chancen-Analyst: Leite basierend NUR auf diesen Maßnahmen für jede Partei exakt die 3 wesentlichen Chancen/Potenziale ab.
-                Behalte die exakte Parteistruktur bei und füge folgendes Format hinzu:
+                Deine Aufgabe: Leite basierend NUR auf diesen Maßnahmen für jede Partei exakt die 3 wesentlichen Chancen sowie die 3 wesentlichen Risiken und Umsetzungsfragen ab.
+                Ergänze den Text für jede Partei um die Abschnitte CHANCEN_SUMMARY und RISIKEN_SUMMARY mit jeweils 3 Detailpunkten.
+
+                Gib den finalen, vollständigen Text in exakt diesem Schema aus:
+                ## [PARTEI NAME]
+                **MASSNAHMEN_SUMMARY:** [Behalte den Text von Agent 1]
+                - **Detaillierte Vorhaben & Belege:** [Behalte die Punkte von Agent 1]
                 **CHANCEN_SUMMARY:** [Kurzer Satz zur Hauptchance]
                 - **Detaillierte Potenziale & Belege:**
+                  - 1. ...
+                  - 2. ...
+                  - 3. ...
+                **RISIKEN_SUMMARY:** [Kurzer Satz zum Hauptrisiko]
+                - **Detaillierte Risiken & Lücken:**
                   - 1. ...
                   - 2. ...
                   - 3. ...
@@ -399,38 +407,7 @@ if st.button("Starte Multi-Agenten-Analyse"):
                     model=MODEL_NAME,
                     contents=[prompt_agent2]
                 )
-                agent2_output = res2.text if res2 and res2.text else ""
-
-                # --- AGENT 3: Der Kritiker & Risiko-Prüfer (Kombiniert & prüft kritisch) ---
-                status_box.markdown('<div class="agent-status">🤖 Agent 3 (Kritiker & Risiko-Prüfer) hinterfragt die Umsetzbarkeit und deckt Lücken auf...</div>', unsafe_allow_html=True)
-                
-                prompt_agent3 = f"""
-                Hier ist die bisherige Analyse zum Thema '{topic}':
-                {agent2_output}
-
-                Deine Aufgabe als kritischer Prüfer: Hinterfrage die Vorhaben und Maßnahmen kritisch. Beleuchte Umsetzungsrisiken, Finanzierungshürden oder logische Lücken. 
-                Füge für jede Partei im gleichen Format die Risiken hinzu:
-                **RISIKEN_SUMMARY:** [Kurzer Satz zum Hauptrisiko]
-                - **Detaillierte Risiken & Lücken:**
-                  - 1. ...
-                  - 2. ...
-                  - 3. ...
-
-                Gib den finalen, vollständigen Text für alle Parteien in exakt diesem Schema aus (ohne zusätzlichen Einleitungstext):
-                ## [PARTEI NAME]
-                **MASSNAHMEN_SUMMARY:** ...
-                - **Detaillierte Vorhaben & Belege:** ...
-                **CHANCEN_SUMMARY:** ...
-                - **Detaillierte Potenziale & Belege:** ...
-                **RISIKEN_SUMMARY:** ...
-                - **Detaillierte Risiken & Lücken:** ...
-                """
-                
-                res3 = client.models.generate_content(
-                    model=MODEL_NAME,
-                    contents=[prompt_agent3]
-                )
-                final_response = res3.text if res3 and res3.text else ""
+                final_response = res2.text if res2 and res2.text else ""
                 
                 status_box.empty()
 
@@ -439,11 +416,11 @@ if st.button("Starte Multi-Agenten-Analyse"):
                     if is_hot_topic:
                         save_analysis_to_json(selected_category_path, topic, final_response)
                 else:
-                    st.error("Fehler: Die Agenten-Pipeline lieferte keinen Text.")
+                    st.error("Fehler: Agent 2 lieferte keinen Text.")
 
             except Exception as e:
                 status_box.empty()
-                st.error(f"Fehler bei der Multi-Agenten-Analyse: {e}")
+                st.error(f"Fehler bei der 2-Agenten-Analyse: {e}")
 
 # --- FUßNOTE MIT VERSION ---
-st.markdown('<div class="footer">VoteCore V1.4 (Multi-Agent)</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">VoteCore V1.6 (2-Agent Pipeline)</div>', unsafe_allow_html=True)
