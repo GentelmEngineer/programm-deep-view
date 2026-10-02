@@ -79,7 +79,7 @@ DATA_DIR = "data"
 
 MODELS_TO_TRY = [
     "gemini-3.5-flash-lite",
-"gemini-3.8-flash"
+"gemini-3.8-flash"]
 
 def get_pdf_page_count(filepath):
     try:
