@@ -75,10 +75,10 @@ if not api_key:
     st.error("FEHLER: GEMINI_API_KEY fehlt!")
     st.stop()
 
-# Client mit 30-Sekunden Timeout
+# Client mit 90 Sekunden Timeout für große PDFs
 client = genai.Client(
     api_key=api_key, 
-    http_options=HttpOptions(timeout=30 * 1000)
+    http_options=HttpOptions(timeout=90 * 1000)
 )
 DATA_DIR = "data"
 
@@ -340,7 +340,6 @@ if st.button("Starte die Analyse"):
         if is_hot_topic and topic in precomputed_analyses:
             render_analysis_text(precomputed_analyses[topic])
         else:
-            # Optimierter, extrem kompakter Prompt (max. 3 wesentliche Punkte, ohne Tabelle)
             prompt = f"""
             Analysiere neutral die Vorhaben der Parteien zum Thema: {topic}
             Nutze ausschliesslich die hochgeladenen Parteiprogramme.
