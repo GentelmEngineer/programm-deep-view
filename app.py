@@ -54,16 +54,6 @@ st.markdown("""
         margin-bottom: 15px; 
     }
     
-    .agent-status {
-        background-color: #21262d;
-        border-left: 3px solid #58a6ff;
-        padding: 8px 12px;
-        margin-bottom: 10px;
-        font-size: 0.8rem;
-        color: #8b949e;
-        border-radius: 0 6px 6px 0;
-    }
-    
     .stButton>button { 
         background-color: #161b22 !important; 
         color: #ffffff !important; 
@@ -230,7 +220,7 @@ def format_sources_in_text(text):
 st.markdown("""
 <div class="title-box">
     <div class="title-text">VoteCore</div>
-    <div class="sub-text">Deep-Analysis von Parteiprogrammen (Robuste 2-Agent Pipeline)</div>
+    <div class="sub-text">Deep-Analysis von Parteiprogrammen</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -287,7 +277,7 @@ st.markdown("---")
 st.markdown("### 📖 Thema analysieren")
 topic = st.text_input("Thema eingeben oder oben ein Hot Topic anklicken:", value=st.session_state.selected_topic)
 
-if st.button("Starte Analyse"):
+if st.button("Starte die Analyse"):
     if not selected_files or not topic:
         st.warning("Bitte wähle ein Thema aus.")
     else:
@@ -351,79 +341,49 @@ if st.button("Starte Analyse"):
         if is_hot_topic and topic in precomputed_analyses:
             render_analysis_text(precomputed_analyses[topic])
         else:
-            status_box = st.empty()
-            
-            try:
-                # --- AGENT 1: Vollständiger, tiefgehender Maßnahmen-Extraktor ---
-                status_box.markdown('<div class="agent-status">🤖 Agent 1 (Maßnahmen-Analyst) durchleuchtet die Parteiprogramme...</div>', unsafe_allow_html=True)
-                
-                prompt_agent1 = f"""
-                Analysiere neutral und tiefgehend die konkreten Vorhaben und Maßnahmen der Parteien zum Thema: {topic}
-                Nutze ausschliesslich die hochgeladenen Parteiprogramme.
-                Extrahiere pro Partei die wesentlichen Maßnahmen mitsamt exakter Quellenangabe [Quelle: Dateiname.pdf, S. X].
+            prompt = f"""
+            Analysiere neutral die Vorhaben der Parteien zum Thema: {topic}
+            Nutze ausschliesslich die hochgeladenen Parteiprogramme.
+            Beschränke dich pro Kategorie auf exakt die 3 wesentlichen Punkte inkl. Quellenangabe [Quelle: Dateiname.pdf, S. X].
 
-                Antworte strikt im Format:
-                ## [PARTEI NAME]
-                **MASSNAHMEN_SUMMARY:** [Kurzer Satz zur Hauptmaßnahme]
-                - **Detaillierte Vorhaben & Belege:**
-                  - 1. [Detaillierte Beschreibung] [Quelle: ...]
-                  - 2. [Detaillierte Beschreibung] [Quelle: ...]
-                  - 3. [Detaillierte Beschreibung] [Quelle: ...]
-                """
-                
-                res1 = client.models.generate_content(
-                    model=MODEL_NAME,
-                    contents=[*active_g_files, prompt_agent1]
-                )
-                agent1_output = res1.text if res1 and res1.text else ""
+            Antworte strikt im folgenden Format:
 
-                # --- AGENT 2: Synthesizer & Kritiker (Baut den finalen Bericht komplett zusammen) ---
-                status_box.markdown('<div class="agent-status">🤖 Agent 2 (Chancen- & Risiko-Prüfer) bewertet Potenziale und Hürden...</div>', unsafe_allow_html=True)
-                
-                prompt_agent2 = f"""
-                Hier sind die von Agent 1 extrahierten Maßnahmen der Parteien zum Thema '{topic}':
-                {agent1_output}
+            ## [PARTEI NAME]
+            **MASSNAHMEN_SUMMARY:** [Kurzer Satz zur Hauptmaßnahme]
+            - **Detaillierte Vorhaben & Belege:**
+              - 1. ... [Quelle: ...]
+              - 2. ... [Quelle: ...]
+              - 3. ... [Quelle: ...]
 
-                Deine Aufgabe: Nimm diesen Inhalt als Basis. Erstelle für JEDE Partei den vollständigen, finalen Bericht. 
-                Übernehme den Parteinamen und die Maßnahmen von Agent 1 exakt, und ergänze für jede Partei jeweils die Chancen und die Risiken/Umsetzungsfragen.
+            **CHANCEN_SUMMARY:** [Kurzer Satz zur Hauptchance]
+            - **Detaillierte Potenziale & Belege:**
+              - 1. ... [Quelle: ...]
+              - 2. ... [Quelle: ...]
+              - 3. ... [Quelle: ...]
 
-                Antworte strikt im folgenden Format für jede Partei:
-                ## [PARTEI NAME]
-                **MASSNAHMEN_SUMMARY:** [Übernehme die Maßnahmen-Zusammenfassung]
-                - **Detaillierte Vorhaben & Belege:**
-                  [Übernehme die detaillierten Punkte von Agent 1]
+            **RISIKEN_SUMMARY:** [Kurzer Satz zum Hauptrisiko]
+            - **Detaillierte Risiken & Lücken:**
+              - 1. ... [Quelle: ...]
+              - 2. ... [Quelle: ...]
+              - 3. ... [Quelle: ...]
+            """
 
-                **CHANCEN_SUMMARY:** [Kurzer Satz zur Hauptchance]
-                - **Detaillierte Potenziale & Belege:**
-                  - 1. ...
-                  - 2. ...
-                  - 3. ...
+            response_text = None
+            with st.spinner(f"Führe Analyse für '{topic}' aus..."):
+                try:
+                    res = client.models.generate_content(
+                        model=MODEL_NAME,
+                        contents=[*active_g_files, prompt]
+                    )
+                    if res and res.text:
+                        response_text = res.text
+                except Exception as e:
+                    st.error(f"Fehler bei der Analyse: {e}")
 
-                **RISIKEN_SUMMARY:** [Kurzer Satz zum Hauptrisiko]
-                - **Detaillierte Risiken & Lücken:**
-                  - 1. ...
-                  - 2. ...
-                  - 3. ...
-                """
-                
-                res2 = client.models.generate_content(
-                    model=MODEL_NAME,
-                    contents=[prompt_agent2]
-                )
-                final_response = res2.text if res2 and res2.text else ""
-                
-                status_box.empty()
-
-                if final_response:
-                    render_analysis_text(final_response)
-                    if is_hot_topic:
-                        save_analysis_to_json(selected_category_path, topic, final_response)
-                else:
-                    st.error("Fehler: Agent 2 lieferte keinen Bericht.")
-
-            except Exception as e:
-                status_box.empty()
-                st.error(f"Fehler bei der Analyse: {e}")
+            if response_text:
+                render_analysis_text(response_text)
+                if is_hot_topic:
+                    save_analysis_to_json(selected_category_path, topic, response_text)
 
 # --- FUßNOTE MIT VERSION ---
-st.markdown('<div class="footer">VoteCore V1.8 (Robust 2-Agent)</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">VoteCore V1.9</div>', unsafe_allow_html=True)
