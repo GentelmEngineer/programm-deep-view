@@ -3,6 +3,7 @@ import json
 import glob
 import streamlit as st
 from google import genai
+from google.genai.types import HttpOptions
 import pypdf
 
 # Layout & Styling
@@ -74,12 +75,15 @@ if not api_key:
     st.error("FEHLER: GEMINI_API_KEY fehlt!")
     st.stop()
 
-client = genai.Client(api_key=api_key)
+# Client mit 30-Sekunden Timeout
+client = genai.Client(
+    api_key=api_key, 
+    http_options=HttpOptions(timeout=30 * 1000)
+)
 DATA_DIR = "data"
 
-MODELS_TO_TRY = [
-    "gemini-3.5-flash-lite",
-"gemini-3.8-flash"]
+PRIMARY_MODEL = "gemini-3.8-flash"
+FALLBACK_MODEL = "gemini-3.7-flash"
 
 def get_pdf_page_count(filepath):
     try:
@@ -88,12 +92,10 @@ def get_pdf_page_count(filepath):
     except Exception:
         return "?"
 
-# --- PERSISTENTES CLOUD-DATEI-CACHING (Verhindert erneutes Hochladen) ---
 def get_cached_gemini_files(file_tuples, category_path):
     cache_path = os.path.join(category_path, "gemini_files_cache.json")
     cloud_file_map = {}
     
-    # Versuche bestehenden Cloud-Cache zu laden
     if os.path.exists(cache_path):
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
@@ -108,16 +110,13 @@ def get_cached_gemini_files(file_tuples, category_path):
         file_basename = os.path.basename(pdf_path)
         g_file = None
         
-        # Prüfen, ob die Datei bereits in der Cloud registriert ist und existiert
         if file_basename in cloud_file_map:
             remote_name = cloud_file_map[file_basename]
             try:
-                # Testen, ob das File noch in der Gemini Cloud existiert
                 g_file = client.files.get(name=remote_name)
             except Exception:
-                g_file = None # Wurde in der Cloud gelöscht / abgelaufen
+                g_file = None
 
-        # Wenn nicht vorhanden, einmalig hochladen
         if not g_file:
             with st.spinner(f"Lade '{party_name}' einmalig in die Gemini-Cloud hoch..."):
                 g_file = client.files.upload(file=pdf_path)
@@ -126,7 +125,6 @@ def get_cached_gemini_files(file_tuples, category_path):
 
         gemini_files.append(g_file)
 
-    # Cache aktualisieren, falls neue Dateien hochgeladen wurden
     if updated:
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -161,7 +159,6 @@ def get_hot_topics(file_tuples, category_path, active_g_files, _api_key):
     if cached_topics:
         return cached_topics
 
-    temp_client = genai.Client(api_key=_api_key)
     fallback_topics = ["Klimaschutz", "Steuern", "Digitalisierung", "Rente", "Mieten"]
     if not active_g_files:
         return fallback_topics
@@ -169,9 +166,9 @@ def get_hot_topics(file_tuples, category_path, active_g_files, _api_key):
     prompt = "Nenne exakt 5 prägnante Hauptthemen/Schlagwörter dieser Parteiprogramme. Gib NUR eine kommaseparierte Liste zurück."
     
     generated_topics = None
-    for model_name in MODELS_TO_TRY:
+    for model_name in [PRIMARY_MODEL, FALLBACK_MODEL]:
         try:
-            res = temp_client.models.generate_content(
+            res = client.models.generate_content(
                 model=model_name,
                 contents=[*active_g_files, prompt]
             )
@@ -250,7 +247,6 @@ if categories:
 if selected_files:
     info_str = " | ".join([f"<b>{name}</b> ({pg} S.)" for name, _, pg in selected_files])
     st.markdown(f'<div class="pdf-info">Aktives Parteien-Set: {info_str}</div>', unsafe_allow_html=True)
-    # Nutzt jetzt den persistenten Cloud-Cache für die Dateien
     active_g_files = get_cached_gemini_files(selected_files, selected_category_path)
 else:
     st.warning("Keine PDFs in dieser Kategorie gefunden.")
@@ -291,9 +287,6 @@ if st.button("Starte die Analyse"):
             parts = full_text.split("## ")
             for part in parts:
                 if not part.strip():
-                    continue
-                if part.startswith("📊"):
-                    st.markdown("## 📊 " + part.replace("📊", ""))
                     continue
                     
                 lines = part.split("\n")
@@ -347,41 +340,39 @@ if st.button("Starte die Analyse"):
         if is_hot_topic and topic in precomputed_analyses:
             render_analysis_text(precomputed_analyses[topic])
         else:
+            # Optimierter, extrem kompakter Prompt (max. 3 wesentliche Punkte, ohne Tabelle)
             prompt = f"""
-            Vergleiche ausführlich und neutral die Vorhaben der Parteien zum Thema: {topic}
-            
-            REGELN:
-            1. Nutze AUSSCHLIESSLICH Informationen aus den hochgeladenen Parteiprogrammen.
-            2. Erstelle für jede Kategorie einen prägnanten Kurzsatz (Stichpunkt-Einleitung) und liefere dahinter im Detail-Block die tiefen Ausführungen inkl. Quellenangaben [Quelle: Dateiname.pdf, S. X].
-            3. Falls eine Partei zu dem Thema keine Aussagen trifft, gib dies explizit an.
+            Analysiere neutral die Vorhaben der Parteien zum Thema: {topic}
+            Nutze ausschliesslich die hochgeladenen Parteiprogramme.
+            Beschränke dich pro Kategorie auf exakt die 3 wesentlichen Punkte inkl. Quellenangabe [Quelle: Dateiname.pdf, S. X].
 
-            Antworte strikt im folgenden Markdown-Format:
+            Antworte strikt im folgenden Format:
 
             ## [PARTEI NAME]
-            **MASSNAHMEN_SUMMARY:** [Ein kurzer, aussagekräftiger Satz als Stichpunkt über die Hauptmaßnahmen]
+            **MASSNAHMEN_SUMMARY:** [Kurzer Satz zur Hauptmaßnahme]
             - **Detaillierte Vorhaben & Belege:**
-              - Ausführliche Beschreibungpunkt 1 [Quelle: ...]
-              - Ausführliche Beschreibungpunkt 2 [Quelle: ...]
+              - 1. ... [Quelle: ...]
+              - 2. ... [Quelle: ...]
+              - 3. ... [Quelle: ...]
 
-            **CHANCEN_SUMMARY:** [Ein kurzer, aussagekräftiger Satz als Stichpunkt über die Hauptchancen]
+            **CHANCEN_SUMMARY:** [Kurzer Satz zur Hauptchance]
             - **Detaillierte Potenziale & Belege:**
-              - Ausführliche Analysepunkt 1 [Quelle: ...]
+              - 1. ... [Quelle: ...]
+              - 2. ... [Quelle: ...]
+              - 3. ... [Quelle: ...]
 
-            **RISIKEN_SUMMARY:** [Ein kurzer, aussagekräftiger Satz als Stichpunkt über die Hauptrisiken/Lücken]
-            - **Detaillierte Risiken, Lücken & Kritik:**
-              - Ausführliche Analysepunkt 1 [Quelle: ...]
-
-            ---
-            ## 📊 FAZIT & VERGLEICHSTABELLE
-            Erstelle eine übersichtliche Zusammenfassungstabelle zum direkten Vergleich aller gewählten Parteien:
-            Partei | Kernforderung / Hauptmaßnahme | Erwartete Wirkung | Haupthürde / Risiko
+            **RISIKEN_SUMMARY:** [Kurzer Satz zum Hauptrisiko]
+            - **Detaillierte Risiken & Lücken:**
+              - 1. ... [Quelle: ...]
+              - 2. ... [Quelle: ...]
+              - 3. ... [Quelle: ...]
             """
 
             response_text = None
             last_error = None
 
             with st.spinner(f"Führe Analyse für '{topic}' aus..."):
-                for model_name in MODELS_TO_TRY:
+                for model_name in [PRIMARY_MODEL, FALLBACK_MODEL]:
                     try:
                         res = client.models.generate_content(
                             model=model_name,
@@ -400,7 +391,7 @@ if st.button("Starte die Analyse"):
                 if is_hot_topic:
                     save_analysis_to_json(selected_category_path, topic, response_text)
             else:
-                st.error(f"Fehler bei der Generierung der Analyse: {last_error}")
+                st.error(f"Fehler bei der Analyse (Timeout oder Limit erreicht): {last_error}")
 
 # --- FUßNOTE MIT VERSION ---
 st.markdown('<div class="footer">VoteCore V1.1</div>', unsafe_allow_html=True)
